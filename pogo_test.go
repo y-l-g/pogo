@@ -111,8 +111,6 @@ func TestSharedMemory_BoundsCheck(t *testing.T) {
 func TestCrashResilience(t *testing.T) {
 	// 1. Create a "Broken Worker" script
 	scriptContent := `<?php
-    // Ensure we load the protocol if needed, or rely on autoloader from bootstrap
-    // For this test, purely causing a crash is enough.
     fwrite(STDERR, "Broken Worker Starting... and Dying.\n");
     exit(255);
     `
@@ -121,11 +119,12 @@ func TestCrashResilience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test worker: %v", err)
 	}
-	defer os.Remove(workerFile)
+	defer func() { _ = os.Remove(workerFile) }()
 
-	// Force the Pool to use the system 'php' binary instead of the test runner
-	os.Setenv("POGO_TEST_PHP_BINARY", "php")
-	defer os.Unsetenv("POGO_TEST_PHP_BINARY")
+	if err := os.Setenv("POGO_TEST_PHP_BINARY", "php"); err != nil {
+		t.Fatalf("Failed to set env: %v", err)
+	}
+	defer func() { _ = os.Unsetenv("POGO_TEST_PHP_BINARY") }()
 
 	// 2. Initialize Pool
 	p := NewPool(999)

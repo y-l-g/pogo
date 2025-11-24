@@ -27,14 +27,3 @@ RUN install-php-extensions \
 
 COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 
-WORKDIR /app
-
-COPY composer.json /app/
-COPY lib /app/lib/
-
-RUN composer install --no-dev --classmap-authoritative
-
-COPY examples/demo_index.php /app/public/index.php
-COPY examples/demo_worker.php /app/worker.php
-
-ENV FRANKENPHP_CONFIG="worker ./worker.php"
