@@ -38,7 +38,7 @@ class HelloWorldJob implements JobInterface
             'message' => "Hello, " . ($payload['name'] ?? 'World') . "!",
             'mode' => 'Magic Protocol Dispatch',
             'ts' => microtime(true),
-            'pid' => getmypid()
+            'pid' => getmypid(),
         ];
     }
 }

@@ -38,5 +38,6 @@ RUN composer install --no-dev --classmap-authoritative
 
 COPY examples/demo_index.php /app/public/index.php
 COPY examples/demo_worker.php /app/worker.php
+COPY public /app/public
 
 ENV SERVER_NAME=:80
