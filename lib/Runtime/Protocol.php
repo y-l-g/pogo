@@ -49,6 +49,9 @@ class Protocol
         if ($this->in === false || $this->out === false) {
             $this->in = STDIN;
             $this->out = STDOUT;
+        } else {
+            stream_set_write_buffer($this->out, 0);
+            stream_set_read_buffer($this->in, 0);
         }
 
         $this->err = STDERR;
