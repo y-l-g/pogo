@@ -1,4 +1,4 @@
-# FrankenPHP Pogo Extension
+# FrankenPHP Pogo (PHP Over Go)
 
 ## 1. Project Overview
 
