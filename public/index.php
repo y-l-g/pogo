@@ -1,13 +1,10 @@
 <?php
 
-// public/index.php
-
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-// Le worker est maintenant juste à côté, dans public/
 $workerPath = __DIR__ . '/worker.php';
 
 Go\start_worker_pool($workerPath, 1, 1);
