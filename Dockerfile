@@ -15,7 +15,7 @@ RUN CGO_ENABLED=1 \
     --with github.com/dunglas/caddy-cbrotli \
     --with github.com/dunglas/mercure/caddy \
     --with github.com/dunglas/vulcain/caddy \
-    --with github.com/y-l-g/pogo
+    --with github.com/y-l-g/pogo@latest
 
 FROM dunglas/frankenphp AS runner
 
