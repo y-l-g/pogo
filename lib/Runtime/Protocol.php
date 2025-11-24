@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Go\Runtime;
 
-use ErrorException;
+use Throwable;
 
 class Protocol
 {
@@ -64,9 +64,34 @@ class Protocol
         $this->handshake();
 
         while (true) {
-            $payload = $this->read();
-            if ($payload === null) {
-                break;
+            $task = $this->read();
+            if ($task === null) {
+                break; // Shutdown signal received
+            }
+
+            // Default "Simple Mode" Dispatcher
+            // This allows the one-liner from the README to work out of the box.
+            try {
+                $jobClass = $task['job_class'] ?? null;
+                $payload = $task['payload'] ?? [];
+
+                if ($jobClass && class_exists($jobClass)) {
+                    $job = new $jobClass();
+
+                    // Support standard JobInterface or duck-typing
+                    if (method_exists($job, 'handle')) {
+                        $result = $job->handle($payload);
+                        $this->send($result);
+                        continue;
+                    }
+                }
+
+                // If class doesn't exist or has no handle method
+                $this->error("Protocol::run() could not execute job: " . ($jobClass ?? 'unknown'));
+
+            } catch (Throwable $e) {
+                // Catch application exceptions and forward to Go Host
+                $this->error($e->getMessage(), 'error', false, $e->getTraceAsString());
             }
         }
     }

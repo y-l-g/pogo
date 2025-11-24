@@ -59,4 +59,3 @@ $mbps = ($totalBytes / 1024 / 1024) / $duration;
 
 echo sprintf("Result: %.2f seconds\n", $duration);
 echo sprintf("Throughput: %.2f MB/s\n", $mbps);
-echo "Note: Protocol V2 (Pipe) would likely crash or stall at this throughput.\n";

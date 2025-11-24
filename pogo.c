@@ -687,23 +687,22 @@ PHP_MINIT_FUNCTION(pogo)
 
     zend_hash_init(&shm_registry, 0, NULL, shm_registry_dtor, 1);
 
-    long shm_fd = 5;
     char *env_fd = getenv("FRANKENPHP_WORKER_SHM_FD");
     if (env_fd) {
-        shm_fd = strtol(env_fd, NULL, 10);
-    }
+        long shm_fd = strtol(env_fd, NULL, 10);
 
-    struct stat sb;
-    if (fstat((int)shm_fd, &sb) != -1 && sb.st_size > 0) {
-        size_t size = sb.st_size;
-        char *base = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, (int)shm_fd, 0);
-        if (base == MAP_FAILED) {
-            fprintf(stderr, "[GoWorker] SHM mmap failed\n");
-        } else {
-            shm_region_t *region = pemalloc(sizeof(shm_region_t), 1);
-            region->base = base;
-            region->size = size;
-            zend_hash_index_update_ptr(&shm_registry, (zend_ulong)shm_fd, region);
+        struct stat sb;
+        if (fstat((int)shm_fd, &sb) != -1 && sb.st_size > 0) {
+            size_t size = sb.st_size;
+            char *base = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, (int)shm_fd, 0);
+            if (base == MAP_FAILED) {
+                fprintf(stderr, "[GoWorker] SHM mmap failed\n");
+            } else {
+                shm_region_t *region = pemalloc(sizeof(shm_region_t), 1);
+                region->base = base;
+                region->size = size;
+                zend_hash_index_update_ptr(&shm_registry, (zend_ulong)shm_fd, region);
+            }
         }
     }
 
