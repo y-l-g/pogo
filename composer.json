@@ -1,0 +1,36 @@
+{
+  "name": "y-l-g/go-php",
+  "description": "High-performance pogo library for PHP (FrankenPHP Extension)",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Go\\": "lib/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests/"
+    },
+    "classmap": [
+      "tests/Jobs/",
+      "tests/Mocks/"
+    ]
+  },
+  "authors": [
+    {
+      "name": "y-l-g"
+    }
+  ],
+  "require": {
+    "php": ">=8.4",
+    "ext-json": "*"
+  },
+  "suggest": {
+    "ext-msgpack": "Required for binary transport performance"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^12.4",
+    "friendsofphp/php-cs-fixer": "^3.90"
+  }
+}

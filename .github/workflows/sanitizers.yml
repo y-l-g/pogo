@@ -1,0 +1,88 @@
+---
+name: Sanitizers
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 0"
+
+jobs:
+  sanitizers:
+    name: Test with ${{ matrix.sanitizer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ["asan", "msan"]
+    env:
+      CFLAGS: -g -O0 -fsanitize=${{ matrix.sanitizer == 'asan' && 'address' || 'memory' }} -DZEND_TRACK_ARENA_ALLOC
+      LDFLAGS: -fsanitize=${{ matrix.sanitizer == 'asan' && 'address' || 'memory' }}
+      CC: clang
+      CXX: clang++
+      USE_ZEND_ALLOC: 0
+      ASAN_OPTIONS: detect_leaks=0
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev libargon2-dev libonig-dev libxml2-dev
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Remove system PHP
+        run: sudo apt-get remove --purge --autoremove 'php*' 'libmemcached*'
+
+      - name: Compile Custom PHP (Sanitized)
+        id: compile-php
+        run: |
+          PHP_VERSION="8.5.0"
+          URL="https://www.php.net/distributions/php-${PHP_VERSION}.tar.xz"
+
+          echo "Downloading PHP ${PHP_VERSION}..."
+          mkdir php_src
+          curl -fsSL "$URL" | tar -Jx -C php_src --strip-components=1
+
+          cd php_src
+          ./configure \
+            CFLAGS="$CFLAGS" \
+            LDFLAGS="$LDFLAGS" \
+            --prefix="$(pwd)/../php_build" \
+            --enable-debug \
+            --enable-embed \
+            --enable-zts \
+            --enable-option-checking=fatal \
+            --disable-zend-signals \
+            --without-libxml \
+            --disable-dom \
+            --disable-xml \
+            --disable-simplexml \
+            --disable-xmlwriter \
+            --disable-xmlreader \
+            --disable-opcache-jit \
+            --disable-cli \
+            --disable-cgi \
+            --without-pear \
+            ${{ matrix.sanitizer == 'msan' && '--enable-memory-sanitizer' || '' }}
+
+          make -j"$(nproc)"
+          make install
+
+      - name: Configure CGO flags
+        run: |
+          LIB_PATH=$(pwd)/php_build/lib
+          PHP_CONFIG=$(pwd)/php_build/bin/php-config
+
+          echo "CGO_CFLAGS=$CFLAGS -D_GNU_SOURCE $($PHP_CONFIG --includes)" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$LIB_PATH $LDFLAGS $($PHP_CONFIG --ldflags) $($PHP_CONFIG --libs)" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$LIB_PATH" >> $GITHUB_ENV
+
+      - name: Run Go Tests with Sanitizers
+        run: |
+          go test -v -tags=nobadger,nomysql,nopgx,nowatcher -${{ matrix.sanitizer }} .
