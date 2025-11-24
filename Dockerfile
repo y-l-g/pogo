@@ -3,6 +3,8 @@ FROM dunglas/frankenphp:builder AS builder
 # Copy xcaddy in the builder image
 COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
 
+WORKDIR /app
+
 COPY . ./pogo
 
 # CGO must be enabled to build FrankenPHP
@@ -19,10 +21,16 @@ RUN CGO_ENABLED=1 \
     # Mercure and Vulcain are included in the official build, but feel free to remove them
     --with github.com/dunglas/mercure/caddy \
     --with github.com/dunglas/vulcain/caddy \
+    # Add extra Caddy modules here
     --with github.com/y-l-g/pogo=./pogo/
-# Add extra Caddy modules here
 
 FROM dunglas/frankenphp AS runner
+
+RUN install-php-extensions \
+    @composer \
+    msgpack \
+    zip \
+    opcache
 
 COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 
