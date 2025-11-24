@@ -1,1 +1,3 @@
-<?php echo 'Official FrankenPHP Works';
+<?php
+
+echo 'Official FrankenPHP Works';
