@@ -1,7 +1,9 @@
 package pogo
 
 import (
+	"os"
 	"testing"
+	"time"
 )
 
 func TestSharedMemory_RingBufferStrategy(t *testing.T) {
@@ -104,4 +106,49 @@ func TestSharedMemory_BoundsCheck(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for allocation larger than SHM size")
 	}
+}
+
+func TestCrashResilience(t *testing.T) {
+	// 1. Create a "Broken Worker" script
+	scriptContent := `<?php
+    // Ensure we load the protocol if needed, or rely on autoloader from bootstrap
+    // For this test, purely causing a crash is enough.
+    fwrite(STDERR, "Broken Worker Starting... and Dying.\n");
+    exit(255);
+    `
+	workerFile := "broken_worker_test.php"
+	err := os.WriteFile(workerFile, []byte(scriptContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test worker: %v", err)
+	}
+	defer os.Remove(workerFile)
+
+	// Force the Pool to use the system 'php' binary instead of the test runner
+	os.Setenv("POGO_TEST_PHP_BINARY", "php")
+	defer os.Unsetenv("POGO_TEST_PHP_BINARY")
+
+	// 2. Initialize Pool
+	p := NewPool(999)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("CRITICAL FAILURE: Supervisor Panicked: %v", r)
+		}
+		p.Shutdown()
+	}()
+
+	cfg := PoolConfig{
+		ShmSize:      1024 * 1024,
+		IpcTimeout:   100 * time.Millisecond,
+		ScaleLatency: 50,
+	}
+
+	t.Log("Starting Pool with broken worker...")
+	p.Start(workerFile, 1, 1, 0, cfg)
+
+	// 3. Wait for the crash cycle to stabilize
+	// The backoff is 500ms, so 1.5s allows ~2 restart attempts.
+	time.Sleep(1500 * time.Millisecond)
+
+	t.Log("Supervisor survived crash cycle without hanging.")
 }

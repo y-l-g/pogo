@@ -175,6 +175,7 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 			p.maxWorkers = p.minWorkers
 		}
 
+		// --- SHM INITIALIZATION (Moved here, ensuring it runs ONLY ONCE) ---
 		var err error
 		p.shm, err = NewSharedMemory(p.config.ShmSize)
 		if err != nil {
@@ -182,15 +183,21 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 		} else {
 			log.Printf("[Pool %d] Shared Memory initialized (%d bytes)", p.ID, p.shm.Size)
 		}
+		// ------------------------------------------------------------------
 
 		p.workers = make(chan *phpWorker, p.maxWorkers)
 
+		// Initial Worker Spawn
 		for i := 0; i < int(p.minWorkers); i++ {
+			// Pre-increment to reserve slot
+			atomic.AddInt32(&p.currentWorkers, 1)
 			w := p.spawnWorker()
 			if w != nil {
-				atomic.AddInt32(&p.currentWorkers, 1)
 				p.updatePeakWorkers()
 				p.workers <- w
+			} else {
+				// Revert if failed
+				atomic.AddInt32(&p.currentWorkers, -1)
 			}
 		}
 		log.Printf("[Pool %d] Started with %d workers", p.ID, atomic.LoadInt32(&p.currentWorkers))
@@ -419,18 +426,15 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 			}
 		}
 
+		if worker == nil {
+			log.Printf("[Pool %d] Failed to acquire worker (Attempt %d)", p.ID, attempt+1)
+			continue
+		}
+
 		if p.isTaskCancelled(returnChHandle) {
 			p.workers <- worker
 			pushErrorToChannels(returnCh, nil, "Task was cancelled")
 			return
-		}
-
-		if p.executeOnWorker(worker, payload, returnCh) {
-			return
-		}
-		if worker == nil {
-			log.Printf("[Pool %d] Failed to acquire worker for task (Attempt %d)", p.ID, attempt+1)
-			continue
 		}
 
 		if p.executeOnWorker(worker, payload, returnCh) {
@@ -585,31 +589,34 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 	return true
 }
 
-func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
-	if reason != "" {
-		pushErrorToChannels(returnCh, nil, reason)
-	}
-	worker.dead.Store(true)
-	go func() { _ = worker.ipcWriter.Close(); _ = worker.ipcReader.Close() }()
-
-	p.workersListMu.Lock()
-	delete(p.workersList, worker.id)
-	p.workersListMu.Unlock()
-}
-
 func (p *Pool) spawnWorker() *phpWorker {
 	if p.ctx.Err() != nil {
 		return nil
 	}
 
 	id := int(atomic.AddInt32(&p.workerIdCounter, 1))
-	bin, err := os.Executable()
-	if err != nil {
-		bin = "php"
+
+	var bin string
+	var args []string
+
+	// Allow overriding the binary for testing purposes
+	if testBin := os.Getenv("POGO_TEST_PHP_BINARY"); testBin != "" {
+		bin = testBin
+		// Standard PHP CLI: "php script.php"
+		args = []string{p.entrypoint}
+	} else {
+		// Default FrankenPHP behavior: "frankenphp php-cli script.php"
+		ex, err := os.Executable()
+		if err != nil {
+			bin = "php"
+		} else {
+			bin = ex
+		}
+		args = []string{"php-cli", p.entrypoint}
 	}
 
-	// Use CommandContext for proper signal propagation from Context cancel
-	cmd := exec.CommandContext(p.ctx, bin, "php-cli", p.entrypoint)
+	cmd := exec.CommandContext(p.ctx, bin, args...)
+
 	configureCmd(cmd)
 
 	parentRead, childWrite, _ := os.Pipe()
@@ -628,7 +635,7 @@ func (p *Pool) spawnWorker() *phpWorker {
 	}
 
 	cmd.ExtraFiles = extraFiles
-	cmd.Stderr = os.Stderr // Output to supervisor stderr (Log Bridge)
+	cmd.Stderr = os.Stderr
 
 	worker := &phpWorker{
 		id:         id,
@@ -656,6 +663,7 @@ func (p *Pool) spawnWorker() *phpWorker {
 	_ = childRead.Close()
 	_ = childWrite.Close()
 
+	// --- PROPER PROCESS MONITORING & RESTART LOGIC ---
 	go func() {
 		_ = cmd.Wait()
 		worker.dead.Store(true)
@@ -664,24 +672,70 @@ func (p *Pool) spawnWorker() *phpWorker {
 		delete(p.workersList, id)
 		p.workersListMu.Unlock()
 
+		// Backoff Protection: If died too fast, wait.
+		uptime := time.Since(worker.lastActive)
+		if uptime < 2*time.Second {
+			time.Sleep(500 * time.Millisecond)
+		}
+
 		current := atomic.AddInt32(&p.currentWorkers, -1)
 		if p.ctx.Err() == nil && current < p.minWorkers {
-			time.Sleep(100 * time.Millisecond)
+			// Reserve the slot first
+			atomic.AddInt32(&p.currentWorkers, 1)
 			newW := p.spawnWorker()
 			if newW != nil {
-				atomic.AddInt32(&p.currentWorkers, 1)
 				p.updatePeakWorkers()
 				p.workers <- newW
+			} else {
+				// Failed to respawn, revert count
+				atomic.AddInt32(&p.currentWorkers, -1)
 			}
 		}
 	}()
+
 	if err := p.performHandshake(worker); err != nil {
 		log.Printf("[Pool %d] Handshake failed #%d: %v", p.ID, id, err)
+		if err == io.EOF {
+			return nil
+		}
 		p.killWorker(worker, nil, "")
 		return nil
 	}
 
 	return worker
+}
+
+func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
+	if reason != "" {
+		pushErrorToChannels(returnCh, nil, reason)
+	}
+
+	if worker.dead.Swap(true) {
+		return
+	}
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[Pool %d] Panic closing worker pipes: %v", p.ID, r)
+			}
+		}()
+
+		if worker.ipcWriter != nil {
+			_ = worker.ipcWriter.Close()
+		}
+		if worker.ipcReader != nil {
+			_ = worker.ipcReader.Close()
+		}
+
+		if worker.cmd != nil && worker.cmd.Process != nil {
+			_ = worker.cmd.Process.Kill()
+		}
+	}()
+
+	p.workersListMu.Lock()
+	delete(p.workersList, worker.id)
+	p.workersListMu.Unlock()
 }
 
 func (p *Pool) performHandshake(w *phpWorker) error {
