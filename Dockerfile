@@ -3,8 +3,6 @@ FROM dunglas/frankenphp:builder-php8.5 AS builder
 # Copy xcaddy in the builder image
 COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
 
-COPY . /usr/src/pogo
-
 RUN CGO_ENABLED=1 \
     XCADDY_SETCAP=1 \
     XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx" \
@@ -17,7 +15,7 @@ RUN CGO_ENABLED=1 \
     --with github.com/dunglas/caddy-cbrotli \
     --with github.com/dunglas/mercure/caddy \
     --with github.com/dunglas/vulcain/caddy \
-    --with github.com/y-l-g/pogo=/usr/src/pogo
+    --with github.com/y-l-g/pogo
 
 FROM dunglas/frankenphp AS runner
 
