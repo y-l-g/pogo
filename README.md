@@ -20,12 +20,12 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 ### Core Philosophy
 
-1.  **The "OS" Pattern:** The Go Host acts as the Operating System/Supervisor. It manages memory, scheduling, IO, and process lifecycles. The PHP Workers act as User-Space applications; they focus solely on business logic.
-2.  **Clean Separation:** Communication occurs over explicit IPC channels and Shared Memory segments. We do not modify the Zend Engine's core memory model (no ZTS required), ensuring maximum compatibility with existing PHP extensions.
-3.  **Magic Marshalling:** Go primitives (Channels, WaitGroups) are exposed to PHP as objects. When passed between contexts, they are automatically marshalled into lightweight handles (`uintptr`), allowing PHP scripts to coordinate complex topologies without understanding the underlying Go memory pointers.
-4.  **Hybrid Transport:**
-    - **Small Payloads (<1KB):** Travel via standard Pipes (`php://fd/3`, `php://fd/4`) for ultra-low latency.
-    - **Large Payloads (>1KB):** Transparently switch to **Shared Memory (Mmap)**. This version utilizes a **Strict Circular Ring Buffer** (FIFO) to bypass pipe buffer limitations and reduce syscall overhead, achieving throughputs exceeding 800 MB/s.
+1. **The "OS" Pattern:** The Go Host acts as the Operating System/Supervisor. It manages memory, scheduling, IO, and process lifecycles. The PHP Workers act as User-Space applications; they focus solely on business logic.
+2. **Clean Separation:** Communication occurs over explicit IPC channels and Shared Memory segments.
+3. **Magic Marshalling:** Go primitives (Channels, WaitGroups) are exposed to PHP as objects. When passed between contexts, they are automatically marshalled into lightweight handles (`uintptr`), allowing PHP scripts to coordinate complex topologies without understanding the underlying Go memory pointers.
+4. **Hybrid Transport:**
+   - **Small Payloads (<1KB):** Travel via standard Pipes (`php://fd/3`, `php://fd/4`) for ultra-low latency.
+   - **Large Payloads (>1KB):** Transparently switch to **Shared Memory (Mmap)**. This version utilizes a **Strict Circular Ring Buffer** (FIFO) to bypass pipe buffer limitations and reduce syscall overhead, achieving throughputs exceeding 800 MB/s.
 
 ---
 
@@ -33,8 +33,8 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 ### Prerequisites
 
-- **Go:** 1.25 or higher.
-- **PHP:** 8.4 or higher (CLI).
+- **Go:** 1.25.
+- **PHP:** 8.5 (CLI).
 - **OS:** Linux.
 - **Extensions:** `ext-json` (Required), `ext-msgpack` (Highly Recommended for performance).
 
@@ -42,25 +42,27 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 This extension is designed to be compiled _into_ FrankenPHP or a custom Caddy build using `xcaddy`.
 
-1.  **Clone the Repository:**
+1. **Clone the Repository:**
 
-    ```bash
-    git clone https://github.com/y-l-g/pogo.git
-    cd pogo
-    ```
+   ```bash
+   git clone https://github.com/y-l-g/pogo.git
+   cd pogo
+   ```
 
-2.  **Build with XCaddy:**
-    You must point xcaddy to the local replacement or the published module.
+2. **Build with XCaddy:**
+   You must point xcaddy to the local replacement or the published module.
 
-    ```bash
-    CGO_CFLAGS=$(php-config --includes) \
-    CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
-    xcaddy build \
-        --output frankenphp \
-        --with github.com/y-l-g/pogo=. \
-        --with github.com/dunglas/frankenphp/caddy \
-        --with github.com/dunglas/caddy-cbrotli
-    ```
+   ```bash
+   CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
+   CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
+   XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx,nowatcher" \
+   CGO_ENABLED=1 \
+   xcaddy build \
+       --output frankenphp \
+       --with github.com/y-l-g/pogo=. \
+       --with github.com/dunglas/frankenphp/caddy \
+       --with github.com/dunglas/caddy-cbrotli
+   ```
 
 ### Runtime Configuration
 
@@ -405,6 +407,6 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 
 ### Known Limitations
 
-1.  **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Go\Channel` / `Go\WaitGroup` objects can be passed.
-2.  **Windows Support:** While `exec.CommandContext` improves portability, file descriptor passing and `mmap` are OS-dependent. Linux/MacOS is the primary target.
-3.  **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent, effectively reducing the usable SHM size slightly. Increasing `shm_size` mitigates this.
+1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Go\Channel` / `Go\WaitGroup` objects can be passed.
+2. **Windows Support:** While `exec.CommandContext` improves portability, file descriptor passing and `mmap` are OS-dependent. Linux/MacOS is the primary target.
+3. **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent, effectively reducing the usable SHM size slightly. Increasing `shm_size` mitigates this.
