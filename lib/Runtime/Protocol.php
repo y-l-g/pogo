@@ -62,6 +62,41 @@ class Protocol
     public function run(): void
     {
         $this->handshake();
+
+        while (true) {
+            $payload = $this->read();
+            if ($payload === null) {
+                break;
+            }
+        }
+    }
+
+    public function handshake(): void
+    {
+        $header = $this->readN(5);
+
+        if ($header === false) {
+            throw new IOException("Handshake Failed: Host closed connection immediately.");
+        }
+
+        $parts = unpack('Nlen/Ctype', $header);
+        if ($parts === false) {
+            throw new IOException("Handshake Failed: Invalid header.");
+        }
+
+        if ($parts['type'] !== self::TYPE_HELLO) {
+            throw new IOException(sprintf(
+                "Handshake Failed: Expected HELLO (0x03), got 0x%02X",
+                $parts['type']
+            ));
+        }
+
+        $body = $this->readN($parts['len']);
+        if ($body === false) {
+            throw new IOException("Handshake Failed: Unexpected EOF reading body.");
+        }
+
+        $this->handleHello(json_decode($body, true) ?: []);
     }
 
     public function read(int $timeoutSeconds = 0): ?array

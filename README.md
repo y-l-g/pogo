@@ -33,10 +33,10 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 ### Prerequisites
 
-- **Go:** 1.25.
-- **PHP:** 8.5 (CLI).
-- **OS:** Linux.
-- **Extensions:** `ext-json` (Required), `ext-msgpack` (Highly Recommended for performance).
+- **Go:** 1.25
+- **PHP:** 8.5
+- **OS:** Linux
+- **Extensions:** `ext-json` (Required), `ext-msgpack` (Highly Recommended for performance)
 
 ### Compilation
 

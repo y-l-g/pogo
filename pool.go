@@ -428,6 +428,14 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 		if p.executeOnWorker(worker, payload, returnCh) {
 			return
 		}
+		if worker == nil {
+			log.Printf("[Pool %d] Failed to acquire worker for task (Attempt %d)", p.ID, attempt+1)
+			continue
+		}
+
+		if p.executeOnWorker(worker, payload, returnCh) {
+			return
+		}
 		log.Printf("[Pool %d] Retrying task (Attempt %d/%d)", p.ID, attempt+1, maxRetries)
 	}
 
@@ -648,12 +656,6 @@ func (p *Pool) spawnWorker() *phpWorker {
 	_ = childRead.Close()
 	_ = childWrite.Close()
 
-	if err := p.performHandshake(worker); err != nil {
-		log.Printf("[Pool %d] Handshake failed #%d: %v", p.ID, id, err)
-		p.killWorker(worker, nil, "")
-		return nil
-	}
-
 	go func() {
 		_ = cmd.Wait()
 		worker.dead.Store(true)
@@ -663,8 +665,8 @@ func (p *Pool) spawnWorker() *phpWorker {
 		p.workersListMu.Unlock()
 
 		current := atomic.AddInt32(&p.currentWorkers, -1)
-
 		if p.ctx.Err() == nil && current < p.minWorkers {
+			time.Sleep(100 * time.Millisecond)
 			newW := p.spawnWorker()
 			if newW != nil {
 				atomic.AddInt32(&p.currentWorkers, 1)
@@ -673,6 +675,11 @@ func (p *Pool) spawnWorker() *phpWorker {
 			}
 		}
 	}()
+	if err := p.performHandshake(worker); err != nil {
+		log.Printf("[Pool %d] Handshake failed #%d: %v", p.ID, id, err)
+		p.killWorker(worker, nil, "")
+		return nil
+	}
 
 	return worker
 }
