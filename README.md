@@ -69,8 +69,6 @@ Install the library via Composer:
 composer require pogo/pogo
 ```
 
-````
-
 Create three files in a `public/` directory:
 
 `public/HelloWorldJob.php` (The Business Logic):
@@ -471,5 +469,3 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Go\Channel` / `Go\WaitGroup` objects can be passed.
 2. **Windows Process Management:** While the SHM layer is now cross-platform, full process lifecycle management (signals) on Windows behaves differently than POSIX systems. Primary support targets Linux/MacOS.
 3. **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent. Increasing `shm_size` mitigates this.
-
-````
