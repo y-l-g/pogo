@@ -1,15 +1,14 @@
 <?php
 
-ini_set('display_errors', 1);
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/HelloWorldJob.php';
 
-$workerPath = __DIR__ . '/worker.php';
+// Start the Supervisor
+Go\start_worker_pool(__DIR__ . '/worker.php', 1, 1);
 
-Go\start_worker_pool($workerPath, 1, 1);
+// Dispatch
+$future = Go\async('HelloWorldJob', ['name' => 'Docker User']);
 
-$future = Go\async('HelloWorldJob', ['name' => 'Docker Volume']);
-
+// Result
 header('Content-Type: application/json');
 echo json_encode($future->await(2.0), JSON_PRETTY_PRINT);

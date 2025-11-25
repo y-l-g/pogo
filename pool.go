@@ -679,7 +679,7 @@ func (p *Pool) spawnWorker() *phpWorker {
 		// Backoff Protection: If died too fast, wait.
 		uptime := time.Since(worker.lastActive)
 		if uptime < 2*time.Second {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(3 * time.Second)
 		}
 
 		current := atomic.AddInt32(&p.currentWorkers, -1)
