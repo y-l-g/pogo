@@ -1,11 +1,8 @@
 <?php
 
-// worker/worker-laravel.php (Advanced Stateful Worker)
-
 ini_set('display_errors', 'stderr');
 
 require __DIR__ . '/../lib/Runtime/Protocol.php';
-// Expecting vendor/autoload.php in root relative to worker
 require __DIR__ . '/../vendor/autoload.php';
 
 use Go\Runtime\Protocol;

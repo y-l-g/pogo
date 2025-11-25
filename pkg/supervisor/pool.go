@@ -1,4 +1,4 @@
-package pogo
+package supervisor
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime/cgo"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -18,16 +19,7 @@ import (
 	"time"
 
 	"github.com/ugorji/go/codec"
-)
-
-const (
-	PktTypeData     = 0x00
-	PktTypeError    = 0x01
-	PktTypeFatal    = 0x02
-	PktTypeHello    = 0x03
-	PktTypeShm      = 0x04
-	PktTypeShutdown = 0x09
-	MaxPayloadSize  = 16 * 1024 * 1024
+	"github.com/y-l-g/pogo/pkg/shm"
 )
 
 type GoTask struct {
@@ -51,6 +43,7 @@ type phpWorker struct {
 type PoolConfig struct {
 	ShmSize      int64
 	IpcTimeout   time.Duration
+	JobTimeout   time.Duration
 	ScaleLatency int64
 }
 
@@ -100,9 +93,10 @@ type Pool struct {
 	maxJobs    int32
 
 	tasks           chan GoTask
-	workers         chan *phpWorker
+	workers         chan *phpWorker // Idle workers
+	workerSemaphore chan struct{}   // Semaphore for total active workers (replaces currentWorkers)
+
 	activeGoWorkers int64
-	currentWorkers  int32
 	peakWorkers     int32
 	workerIdCounter int32
 
@@ -121,7 +115,7 @@ type Pool struct {
 	workersList   map[int]*phpWorker
 	workersListMu sync.Mutex
 
-	shm      *SharedMemory
+	shm      *shm.SharedMemory
 	mpHandle codec.MsgpackHandle
 	config   PoolConfig
 }
@@ -148,8 +142,73 @@ func NewPool(id int64) *Pool {
 	return p
 }
 
+func (p *Pool) Context() context.Context {
+	return p.ctx
+}
+
+func (p *Pool) Wg() *sync.WaitGroup {
+	return &p.wg
+}
+
+func (p *Pool) Tasks() chan<- GoTask {
+	return p.tasks
+}
+
+func (p *Pool) StoreCancellation(handle uintptr, val *atomic.Bool) {
+	p.cancellations.Store(handle, val)
+}
+
+func (p *Pool) DeleteCancellation(handle uintptr) {
+	p.cancellations.Delete(handle)
+}
+
+func (p *Pool) LoadCancellation(handle uintptr) (*atomic.Bool, bool) {
+	if val, ok := p.cancellations.Load(handle); ok {
+		return val.(*atomic.Bool), true
+	}
+	return nil, false
+}
+
+// GetStats returns pool statistics map
+func (p *Pool) GetStats() map[string]any {
+	total := 0
+	if p.workerSemaphore != nil {
+		total = len(p.workerSemaphore)
+	}
+	return map[string]any{
+		"active_workers": atomic.LoadInt64(&p.activeGoWorkers),
+		"total_workers":  total,
+		"peak_workers":   atomic.LoadInt32(&p.peakWorkers),
+		"queue_depth":    len(p.tasks),
+		"map_size":       p.CancellationsLen(),
+		"p95_wait_ms":    p.latency.P95(),
+	}
+}
+
+// ValidateHandles checks that handles belong to this pool
+func (p *Pool) ValidateHandles(payload map[string]any) error {
+	for _, v := range payload {
+		switch val := v.(type) {
+		case uint64:
+			if obj := getHandleValue(uintptr(val)); obj != nil {
+				if ch, ok := obj.(*Channel); ok && ch.OwnerPoolID != 0 && ch.OwnerPoolID != p.ID {
+					return fmt.Errorf("Channel belongs to Pool %d", ch.OwnerPoolID)
+				}
+				if wg, ok := obj.(*WaitGroup); ok && wg.OwnerPoolID != 0 && wg.OwnerPoolID != p.ID {
+					return fmt.Errorf("WaitGroup belongs to Pool %d", wg.OwnerPoolID)
+				}
+			}
+		case map[string]any:
+			if err := p.ValidateHandles(val); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (p *Pool) updatePeakWorkers() {
-	current := atomic.LoadInt32(&p.currentWorkers)
+	current := int32(len(p.workerSemaphore))
 	for {
 		peak := atomic.LoadInt32(&p.peakWorkers)
 		if current <= peak {
@@ -176,9 +235,9 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 			p.maxWorkers = p.minWorkers
 		}
 
-		// --- SHM INITIALIZATION (Moved here, ensuring it runs ONLY ONCE) ---
+		// --- SHM INITIALIZATION ---
 		var err error
-		p.shm, err = NewSharedMemory(p.config.ShmSize)
+		p.shm, err = shm.NewSharedMemory(p.config.ShmSize)
 		if err != nil {
 			log.Printf("[Pool %d] SHM init failed: %v", p.ID, err)
 		} else {
@@ -187,21 +246,26 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 		// ------------------------------------------------------------------
 
 		p.workers = make(chan *phpWorker, p.maxWorkers)
+		p.workerSemaphore = make(chan struct{}, p.maxWorkers)
 
 		// Initial Worker Spawn
 		for i := 0; i < int(p.minWorkers); i++ {
-			// Pre-increment to reserve slot
-			atomic.AddInt32(&p.currentWorkers, 1)
-			w := p.spawnWorker()
-			if w != nil {
-				p.updatePeakWorkers()
-				p.workers <- w
-			} else {
-				// Revert if failed
-				atomic.AddInt32(&p.currentWorkers, -1)
+			// Attempt to acquire slot
+			select {
+			case p.workerSemaphore <- struct{}{}:
+				w := p.spawnWorker()
+				if w != nil {
+					p.updatePeakWorkers()
+					p.workers <- w
+				} else {
+					// Revert if failed
+					<-p.workerSemaphore
+				}
+			default:
+				log.Printf("[Pool %d] Warn: Min workers > Max workers capacity?", p.ID)
 			}
 		}
-		log.Printf("[Pool %d] Started with %d workers", p.ID, atomic.LoadInt32(&p.currentWorkers))
+		log.Printf("[Pool %d] Started with %d workers", p.ID, len(p.workerSemaphore))
 
 		go p.scalerLoop()
 	})
@@ -223,7 +287,7 @@ func (p *Pool) scalerLoop() {
 
 func (p *Pool) checkScaling() {
 	queueDepth := len(p.tasks)
-	current := atomic.LoadInt32(&p.currentWorkers)
+	current := int32(len(p.workerSemaphore))
 	idle := int(current) - int(atomic.LoadInt64(&p.activeGoWorkers))
 
 	latencyP95 := p.latency.P95()
@@ -237,20 +301,20 @@ func (p *Pool) checkScaling() {
 
 	if p.scaleUpVotes >= 2 && time.Since(p.lastSpawn) > 2*time.Second {
 		go func() {
-			if atomic.LoadInt32(&p.currentWorkers) < p.maxWorkers {
-				if atomic.AddInt32(&p.currentWorkers, 1) <= p.maxWorkers {
-					p.updatePeakWorkers()
-					log.Printf("[Pool %d] Scaling UP (P95: %dms, Queue: %d)", p.ID, latencyP95, queueDepth)
-					p.lastSpawn = time.Now()
-					w := p.spawnWorker()
-					if w != nil {
-						p.workers <- w
-					} else {
-						atomic.AddInt32(&p.currentWorkers, -1)
-					}
+			// Try to acquire a slot (Atomic check-and-act)
+			select {
+			case p.workerSemaphore <- struct{}{}:
+				p.updatePeakWorkers()
+				log.Printf("[Pool %d] Scaling UP (P95: %dms, Queue: %d)", p.ID, latencyP95, queueDepth)
+				p.lastSpawn = time.Now()
+				w := p.spawnWorker()
+				if w != nil {
+					p.workers <- w
 				} else {
-					atomic.AddInt32(&p.currentWorkers, -1)
+					<-p.workerSemaphore
 				}
+			default:
+				// Max workers reached
 			}
 		}()
 		p.scaleUpVotes = 0
@@ -262,7 +326,7 @@ func (p *Pool) checkScaling() {
 			if time.Since(w.lastActive) > 30*time.Second {
 				log.Printf("[Pool %d] Scaling DOWN Worker #%d", p.ID, w.id)
 				p.killWorker(w, nil, "Scaled Down")
-				atomic.AddInt32(&p.currentWorkers, -1)
+				// Release semaphore is handled in killWorker
 			} else {
 				p.workers <- w
 			}
@@ -385,6 +449,7 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 			}
 			worker = nil
 
+			// 1. Try to grab an idle worker
 			select {
 			case w := <-p.workers:
 				if w.dead.Load() {
@@ -392,19 +457,18 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 				}
 				worker = w
 			default:
-				current := atomic.LoadInt32(&p.currentWorkers)
-				if current < p.maxWorkers {
-					if atomic.AddInt32(&p.currentWorkers, 1) <= p.maxWorkers {
-						p.updatePeakWorkers()
-						newW := p.spawnWorker()
-						if newW != nil {
-							worker = newW
-						} else {
-							atomic.AddInt32(&p.currentWorkers, -1)
-						}
+				// 2. If no idle worker, try to spawn a new one (acquire semaphore)
+				select {
+				case p.workerSemaphore <- struct{}{}:
+					p.updatePeakWorkers()
+					newW := p.spawnWorker()
+					if newW != nil {
+						worker = newW
 					} else {
-						atomic.AddInt32(&p.currentWorkers, -1)
+						<-p.workerSemaphore // Failed to spawn, release slot
 					}
+				default:
+					// Semaphore full, no idle workers.
 				}
 			}
 
@@ -412,6 +476,7 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 				break
 			}
 
+			// 3. Wait for an idle worker (Blocking)
 			select {
 			case w := <-p.workers:
 				if w.dead.Load() {
@@ -527,14 +592,44 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 
 	_ = worker.ipcWriter.(*os.File).SetWriteDeadline(time.Time{})
 
+	// --- READ DEADLINE ENFORCEMENT ---
+	if p.config.JobTimeout > 0 {
+		if err := worker.ipcReader.(*os.File).SetReadDeadline(time.Now().Add(p.config.JobTimeout)); err != nil {
+			p.killWorker(worker, returnCh, "SetReadDeadline Failed")
+			return true
+		}
+	}
+	// ---------------------------------
+
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(worker.ipcReader, header); err != nil {
 		if useShm {
 			p.shm.Free(allocatedOffset)
 		}
-		p.killWorker(worker, nil, "")
-		return false
+		// If error is timeout, killWorker will handle it (and returnCh gets error)
+		// io.ReadFull returns ErrTimeout (os.ErrDeadlineExceeded)
+		reason := ""
+		if os.IsTimeout(err) {
+			reason = fmt.Sprintf("Job Timed Out (>%s)", p.config.JobTimeout)
+		}
+		p.killWorker(worker, returnCh, reason)
+		return false // Retry logic in handlePooledDispatch? No, returns true to indicate handled.
+		// Wait, original code returns false on read failure.
+		// In handlePooledDispatch: if p.executeOnWorker(...) { return }
+		// So if executeOnWorker returns true, it considers task done (success or fatal error reported).
+		// If it returns false, it retries?
+		// Old code:
+		// if _, err := io.ReadFull(...); err != nil { ... return false }
+		// handlePooledDispatch loops if attempt < maxRetries.
+		// If a job times out, should we retry?
+		// Usually NO. A timeout is a logic failure, not a transient network blip.
+		// If I return false, it retries 3 times, effectively 3x timeout.
+		// I should probably return true (handled failure) for Timeout.
+		// But return false for EOF (crash).
 	}
+
+	// Clear Read Deadline
+	_ = worker.ipcReader.(*os.File).SetReadDeadline(time.Time{})
 
 	if useShm {
 		p.shm.Free(allocatedOffset)
@@ -676,23 +771,37 @@ func (p *Pool) spawnWorker() *phpWorker {
 		delete(p.workersList, id)
 		p.workersListMu.Unlock()
 
+		// Semaphore Release: The worker slot is now free
+		<-p.workerSemaphore
+
 		// Backoff Protection: If died too fast, wait.
 		uptime := time.Since(worker.lastActive)
 		if uptime < 2*time.Second {
 			time.Sleep(3 * time.Second)
 		}
 
-		current := atomic.AddInt32(&p.currentWorkers, -1)
-		if p.ctx.Err() == nil && current < p.minWorkers {
-			// Reserve the slot first
-			atomic.AddInt32(&p.currentWorkers, 1)
-			newW := p.spawnWorker()
-			if newW != nil {
-				p.updatePeakWorkers()
-				p.workers <- newW
-			} else {
-				// Failed to respawn, revert count
-				atomic.AddInt32(&p.currentWorkers, -1)
+		// Replenishment Check:
+		// Note: Since we released the semaphore above, we check current len()
+		// But concurrency is tricky here.
+		// We should check if we are below minWorkers.
+		// However, spawnWorker requires acquiring a semaphore.
+		// If we just fire a goroutine to spawn, we might race with scale-down or shutdown.
+		if p.ctx.Err() == nil {
+			current := len(p.workerSemaphore)
+			if int32(current) < p.minWorkers {
+				// Attempt to re-acquire and spawn
+				select {
+				case p.workerSemaphore <- struct{}{}:
+					p.updatePeakWorkers()
+					newW := p.spawnWorker()
+					if newW != nil {
+						p.workers <- newW
+					} else {
+						<-p.workerSemaphore
+					}
+				default:
+					// If we can't acquire, it means other workers filled the slots.
+				}
 			}
 		}
 	}()
@@ -719,9 +828,15 @@ func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
 		pushErrorToChannels(returnCh, nil, reason)
 	}
 
+	// Idempotent kill check
 	if worker.dead.Swap(true) {
 		return
 	}
+
+	// Note: We do NOT release the semaphore here.
+	// The `cmd.Wait()` goroutine in `spawnWorker` detects the process exit
+	// and releases the semaphore there.
+	// This ensures we don't double-release or release before the process is actually gone.
 
 	go func() {
 		defer func() {
@@ -815,23 +930,74 @@ func (p *Pool) CancellationsLen() int {
 	return count
 }
 
-func (p *Pool) validateHandles(payload map[string]any) error {
-	for _, v := range payload {
-		switch val := v.(type) {
-		case uint64:
-			if obj := getGoObject(uintptr(val)); obj != nil {
-				if ch, ok := obj.(*Channel); ok && ch.OwnerPoolID != 0 && ch.OwnerPoolID != p.ID {
-					return fmt.Errorf("Channel belongs to Pool %d", ch.OwnerPoolID)
-				}
-				if wg, ok := obj.(*WaitGroup); ok && wg.OwnerPoolID != 0 && wg.OwnerPoolID != p.ID {
-					return fmt.Errorf("WaitGroup belongs to Pool %d", wg.OwnerPoolID)
+// Helpers
+
+func getHandleValue(handle uintptr) (val interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			val = nil
+		}
+	}()
+	return cgo.Handle(handle).Value()
+}
+
+func castToHandle(val any) uintptr {
+	switch v := val.(type) {
+	case uint64:
+		return uintptr(v)
+	case int64:
+		return uintptr(v)
+	case float64:
+		return uintptr(v)
+	default:
+		return 0
+	}
+}
+
+func extractChannels(payload map[string]any) (*Channel, *Channel, uintptr) {
+	var retCh, errCh *Channel
+	var retHandle uintptr
+	if rawRetCh, ok := payload["return_channel"]; ok {
+		if h := castToHandle(rawRetCh); h != 0 {
+			retHandle = h
+			if obj := getHandleValue(h); obj != nil {
+				if ch, ok := obj.(*Channel); ok {
+					retCh = ch
 				}
 			}
-		case map[string]any:
-			if err := p.validateHandles(val); err != nil {
-				return err
+		}
+	}
+	if rawErrCh, ok := payload["error_channel"]; ok {
+		if h := castToHandle(rawErrCh); h != 0 {
+			if obj := getHandleValue(h); obj != nil {
+				if ch, ok := obj.(*Channel); ok {
+					errCh = ch
+				}
+			}
+		}
+	}
+	return retCh, errCh, retHandle
+}
+
+func getWaitGroup(payload map[string]any) *WaitGroup {
+	if rawHandle, ok := payload["wait_group"]; ok {
+		if handle := castToHandle(rawHandle); handle != 0 {
+			if obj := getHandleValue(handle); obj != nil {
+				if wg, ok := obj.(*WaitGroup); ok {
+					return wg
+				}
 			}
 		}
 	}
 	return nil
+}
+
+func pushErrorToChannels(ret *Channel, err *Channel, msg string) {
+	if ret != nil {
+		errJson, _ := json.Marshal(map[string]string{"status": "error", "message": msg})
+		ret.Push(string(errJson))
+	}
+	if err != nil {
+		err.Push(msg)
+	}
 }

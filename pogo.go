@@ -51,6 +51,7 @@ import (
 	"unsafe"
 
 	"github.com/dunglas/frankenphp"
+	"github.com/y-l-g/pogo/pkg/supervisor"
 )
 
 var (
@@ -58,9 +59,9 @@ var (
 	logChan     = make(chan string, 100) // Buffered channel for non-blocking logging
 	logOnce     sync.Once
 
-	poolRegistry  sync.Map // map[int64]*Pool
+	poolRegistry  sync.Map // map[int64]*supervisor.Pool
 	poolIDCounter int64
-	defaultPool   *Pool // ID 0
+	defaultPool   *supervisor.Pool // ID 0
 )
 
 type BridgeLogger struct{}
@@ -104,7 +105,7 @@ func _gopogo_init(fn C.uintptr_t) {
 
 func init() {
 	frankenphp.RegisterExtension(unsafe.Pointer(&C.pogo_module_entry))
-	defaultPool = NewPool(0)
+	defaultPool = supervisor.NewPool(0)
 	poolRegistry.Store(int64(0), defaultPool)
 }
 
@@ -112,50 +113,51 @@ func init() {
 func Go_shutdown_module() {
 	log.Println("Shutting down pogo module...")
 	poolRegistry.Range(func(key, value any) bool {
-		p := value.(*Pool)
+		p := value.(*supervisor.Pool)
 		p.Shutdown()
 		return true
 	})
 }
 
-func RegisterPool(p *Pool) int64 {
+func RegisterPool(p *supervisor.Pool) int64 {
 	id := atomic.AddInt64(&poolIDCounter, 1)
 	p.ID = id
 	poolRegistry.Store(id, p)
 	return id
 }
 
-func GetPool(id int64) *Pool {
+func GetPool(id int64) *supervisor.Pool {
 	if val, ok := poolRegistry.Load(id); ok {
-		return val.(*Pool)
+		return val.(*supervisor.Pool)
 	}
 	return nil
 }
 
 func RemovePool(id int64) {
 	if val, ok := poolRegistry.LoadAndDelete(id); ok {
-		p := val.(*Pool)
+		p := val.(*supervisor.Pool)
 		p.Shutdown()
 	}
 }
 
 //export create_pool_wrapper
 func create_pool_wrapper() C.long {
-	p := NewPool(-1)
+	p := supervisor.NewPool(-1)
 	return C.long(RegisterPool(p))
 }
 
 //export start_pool_wrapper
-func start_pool_wrapper(poolID C.long, entrypoint *C.char, entryLen C.int, minWorkers C.long, maxWorkers C.long, maxJobs C.long, shmSize C.long, ipcTimeoutMs C.long, scaleLatencyMs C.long) {
+func start_pool_wrapper(poolID C.long, entrypoint *C.char, entryLen C.int, minWorkers C.long, maxWorkers C.long, maxJobs C.long, shmSize C.long, ipcTimeoutMs C.long, scaleLatencyMs C.long, jobTimeoutMs C.long) {
 	p := GetPool(int64(poolID))
 	if p == nil {
 		return
 	}
 	ep := C.GoStringN(entrypoint, entryLen)
-	cfg := PoolConfig{
+	cfg := supervisor.PoolConfig{
 		ShmSize:      int64(shmSize),
 		IpcTimeout:   time.Duration(ipcTimeoutMs) * time.Millisecond,
 		ScaleLatency: int64(scaleLatencyMs),
+		JobTimeout:   time.Duration(jobTimeoutMs) * time.Millisecond,
 	}
 	p.Start(ep, int(minWorkers), int(maxWorkers), int(maxJobs), cfg)
 }
@@ -173,28 +175,28 @@ func dispatch_wrapper(name *C.char, nameLen C.int, payload unsafe.Pointer) {
 //export dispatch_to_pool_wrapper
 func dispatch_to_pool_wrapper(poolID C.long, name *C.char, nameLen C.int, payload unsafe.Pointer) {
 	p := GetPool(int64(poolID))
-	if p == nil || p.ctx.Err() != nil {
+	if p == nil || p.Context().Err() != nil {
 		return
 	}
 
-	p.wg.Add(1)
+	p.Wg().Add(1)
 	workerName := C.GoStringN(name, nameLen)
 	goPayload, err := convertPayloadToGo(payload)
 	if err != nil {
-		p.wg.Done()
+		p.Wg().Done()
 		return
 	}
 
-	if err := p.validateHandles(goPayload); err != nil {
+	if err := p.ValidateHandles(goPayload); err != nil {
 		log.Printf("Security Violation: %v", err)
-		p.wg.Done()
+		p.Wg().Done()
 		return
 	}
 
 	select {
-	case p.tasks <- GoTask{Name: workerName, Payload: goPayload, EnqueuedAt: time.Now()}:
-	case <-p.ctx.Done():
-		p.wg.Done()
+	case p.Tasks() <- supervisor.GoTask{Name: workerName, Payload: goPayload, EnqueuedAt: time.Now()}:
+	case <-p.Context().Done():
+		p.Wg().Done()
 	}
 }
 
@@ -206,29 +208,29 @@ func async_wrapper(jobClass *C.char, jobClassLen C.int, args unsafe.Pointer) C.u
 //export async_on_pool_wrapper
 func async_on_pool_wrapper(poolID C.long, jobClass *C.char, jobClassLen C.int, args unsafe.Pointer) C.uintptr_t {
 	p := GetPool(int64(poolID))
-	if p == nil || p.ctx.Err() != nil {
+	if p == nil || p.Context().Err() != nil {
 		return 0
 	}
 
-	p.wg.Add(1)
-	ch := &Channel{OwnerPoolID: int64(poolID)}
+	p.Wg().Add(1)
+	ch := &supervisor.Channel{OwnerPoolID: int64(poolID)}
 	ch.Init(1)
 	chHandle := registerGoObject(ch)
-	p.cancellations.Store(uintptr(chHandle), &atomic.Bool{})
+	p.StoreCancellation(uintptr(chHandle), &atomic.Bool{})
 
 	goArgs, err := convertPayloadToGo(args)
 	if err != nil {
-		p.cancellations.Delete(uintptr(chHandle))
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 		return 0
 	}
 
-	if err := p.validateHandles(goArgs); err != nil {
+	if err := p.ValidateHandles(goArgs); err != nil {
 		log.Printf("Security Violation: %v", err)
-		p.cancellations.Delete(uintptr(chHandle))
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 		return 0
 	}
 
@@ -239,46 +241,46 @@ func async_on_pool_wrapper(poolID C.long, jobClass *C.char, jobClassLen C.int, a
 	}
 
 	select {
-	case p.tasks <- GoTask{Name: "php.dispatch_pooled", Payload: payload, EnqueuedAt: time.Now()}:
-	case <-p.ctx.Done():
-		p.cancellations.Delete(uintptr(chHandle))
+	case p.Tasks() <- supervisor.GoTask{Name: "php.dispatch_pooled", Payload: payload, EnqueuedAt: time.Now()}:
+	case <-p.Context().Done():
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 	}
 	return chHandle
 }
 
 //export start_workers_wrapper
-func start_workers_wrapper(entrypoint *C.char, entryLen C.int, minWorkers C.long, maxWorkers C.long, maxJobs C.long, shmSize C.long, ipcTimeoutMs C.long, scaleLatencyMs C.long) {
-	start_pool_wrapper(0, entrypoint, entryLen, minWorkers, maxWorkers, maxJobs, shmSize, ipcTimeoutMs, scaleLatencyMs)
+func start_workers_wrapper(entrypoint *C.char, entryLen C.int, minWorkers C.long, maxWorkers C.long, maxJobs C.long, shmSize C.long, ipcTimeoutMs C.long, scaleLatencyMs C.long, jobTimeoutMs C.long) {
+	start_pool_wrapper(0, entrypoint, entryLen, minWorkers, maxWorkers, maxJobs, shmSize, ipcTimeoutMs, scaleLatencyMs, jobTimeoutMs)
 }
 
 //export dispatch_task_wrapper
 func dispatch_task_wrapper(taskName *C.char, taskNameLen C.int, args unsafe.Pointer) C.uintptr_t {
 	p := defaultPool
-	if p == nil || p.ctx.Err() != nil {
+	if p == nil || p.Context().Err() != nil {
 		return 0
 	}
 
-	p.wg.Add(1)
-	ch := &Channel{OwnerPoolID: 0}
+	p.Wg().Add(1)
+	ch := &supervisor.Channel{OwnerPoolID: 0}
 	ch.Init(1)
 	chHandle := registerGoObject(ch)
-	p.cancellations.Store(uintptr(chHandle), &atomic.Bool{})
+	p.StoreCancellation(uintptr(chHandle), &atomic.Bool{})
 
 	goArgs, err := convertPayloadToGo(args)
 	if err != nil {
-		p.cancellations.Delete(uintptr(chHandle))
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 		return 0
 	}
 
-	if err := p.validateHandles(goArgs); err != nil {
+	if err := p.ValidateHandles(goArgs); err != nil {
 		log.Printf("Security Violation: %v", err)
-		p.cancellations.Delete(uintptr(chHandle))
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 		return 0
 	}
 
@@ -286,27 +288,27 @@ func dispatch_task_wrapper(taskName *C.char, taskNameLen C.int, args unsafe.Poin
 	goArgs["future_mode"] = true
 
 	select {
-	case p.tasks <- GoTask{Name: C.GoStringN(taskName, taskNameLen), Payload: goArgs, EnqueuedAt: time.Now()}:
-	case <-p.ctx.Done():
-		p.cancellations.Delete(uintptr(chHandle))
+	case p.Tasks() <- supervisor.GoTask{Name: C.GoStringN(taskName, taskNameLen), Payload: goArgs, EnqueuedAt: time.Now()}:
+	case <-p.Context().Done():
+		p.DeleteCancellation(uintptr(chHandle))
 		cgo.Handle(chHandle).Delete()
-		p.wg.Done()
+		p.Wg().Done()
 	}
 	return chHandle
 }
 
 //export cancel_wrapper
 func cancel_wrapper(chHandle C.uintptr_t) C.bool {
-	val, ok := defaultPool.cancellations.Load(uintptr(chHandle))
-	if ok {
-		return C.bool(!val.(*atomic.Bool).Swap(true))
+	// defaultPool might check its own cancellations
+	if val, ok := defaultPool.LoadCancellation(uintptr(chHandle)); ok {
+		return C.bool(!val.Swap(true))
 	}
 
 	found := false
 	poolRegistry.Range(func(key, value any) bool {
-		p := value.(*Pool)
-		if val, ok := p.cancellations.Load(uintptr(chHandle)); ok {
-			found = !val.(*atomic.Bool).Swap(true)
+		p := value.(*supervisor.Pool)
+		if val, ok := p.LoadCancellation(uintptr(chHandle)); ok {
+			found = !val.Swap(true)
 			return false
 		}
 		return true
@@ -321,16 +323,16 @@ func await_wrapper(chHandle C.uintptr_t, timeout C.double) *C.char {
 	if obj == nil {
 		return nil
 	}
-	ch := obj.(*Channel)
+	ch := obj.(*supervisor.Channel)
 	select {
-	case val, ok := <-ch.ch:
+	case val, ok := <-ch.Ch:
 		if !ok {
 			return C.CString("")
 		}
 		return C.CString(val)
 	default:
 	}
-	cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch.ch)}}
+	cases := []reflect.SelectCase{{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch.Ch)}}
 	if timeout >= 0 {
 		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(time.After(time.Duration(float64(timeout) * float64(time.Second))))})
 	}
@@ -350,9 +352,9 @@ func poll_wrapper(chHandle C.uintptr_t) *C.char {
 	if obj == nil {
 		return nil
 	}
-	ch := obj.(*Channel)
+	ch := obj.(*supervisor.Channel)
 	select {
-	case val, ok := <-ch.ch:
+	case val, ok := <-ch.Ch:
 		if !ok {
 			return C.CString("")
 		}
@@ -364,22 +366,17 @@ func poll_wrapper(chHandle C.uintptr_t) *C.char {
 
 //export select_wrapper
 func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) C.select_result {
-	// Optimized Select: Handles passed as array, no Zend HashTable iteration in Go.
-	// We cast the C pointer to a Go slice of uintptr
 	handleSlice := unsafe.Slice((*uintptr)(unsafe.Pointer(handles)), int(count))
 
 	var cases []reflect.SelectCase
 
 	for _, h := range handleSlice {
-		// If C passed 0, it means this slot was not a valid Channel/Future.
-		// We treat it as a "Default" case which makes select non-blocking.
-		// NOTE: PHP land should filter invalid types before calling if it wants strict behavior.
 		if h == 0 {
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
 		} else {
 			obj := getGoObject(h)
-			if ch, ok := obj.(*Channel); ok {
-				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch.ch)})
+			if ch, ok := obj.(*supervisor.Channel); ok {
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch.Ch)})
 			} else {
 				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
 			}
@@ -392,17 +389,14 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 
 	chosen, recv, recvOK := reflect.Select(cases)
 
-	// Timeout
 	if timeoutSeconds >= 0 && chosen == len(cases)-1 {
 		return C.select_result{index: -1, value: nil, status: 1}
 	}
 
-	// Closed Channel
 	if !recvOK {
 		return C.select_result{index: C.long(chosen), value: C.CString(""), status: 0}
 	}
 
-	// Success
 	return C.select_result{
 		index:  C.long(chosen),
 		value:  C.CString(recv.String()),
@@ -417,14 +411,7 @@ func get_pool_stats_wrapper(poolID C.long) *C.char {
 		return C.CString("{}")
 	}
 
-	stats := map[string]any{
-		"active_workers": atomic.LoadInt64(&p.activeGoWorkers),
-		"total_workers":  atomic.LoadInt32(&p.currentWorkers),
-		"peak_workers":   atomic.LoadInt32(&p.peakWorkers),
-		"queue_depth":    len(p.tasks),
-		"map_size":       p.CancellationsLen(),
-		"p95_wait_ms":    p.latency.P95(),
-	}
+	stats := p.GetStats()
 
 	jsonBytes, _ := json.Marshal(stats)
 	return C.CString(string(jsonBytes))
@@ -441,16 +428,16 @@ func removeGoObject(handle C.uintptr_t) {
 	if obj != nil {
 		var poolID int64 = -1
 
-		if ch, ok := obj.(*Channel); ok {
+		if ch, ok := obj.(*supervisor.Channel); ok {
 			poolID = ch.OwnerPoolID
-		} else if wg, ok := obj.(*WaitGroup); ok {
+		} else if wg, ok := obj.(*supervisor.WaitGroup); ok {
 			poolID = wg.OwnerPoolID
 		}
 
 		if poolID != -1 {
 			p := GetPool(poolID)
 			if p != nil {
-				p.cancellations.Delete(h)
+				p.DeleteCancellation(h)
 			}
 		}
 	}
@@ -467,78 +454,44 @@ func getGoObject(handle uintptr) (val interface{}) {
 	return cgo.Handle(handle).Value()
 }
 
-func castToHandle(val any) uintptr {
-	switch v := val.(type) {
-	case uint64:
-		return uintptr(v)
-	case int64:
-		return uintptr(v)
-	case float64:
-		return uintptr(v)
-	default:
-		return 0
-	}
-}
-
-type WaitGroup struct {
-	wg          sync.WaitGroup
-	OwnerPoolID int64
-}
-
-func (wg *WaitGroup) Add(delta int64) { wg.wg.Add(int(delta)) }
-func (wg *WaitGroup) Done()           { wg.wg.Done() }
-func (wg *WaitGroup) Wait()           { wg.wg.Wait() }
-
-type Channel struct {
-	ch          chan string
-	OwnerPoolID int64
-}
-
-func (c *Channel) Init(capacity int64) { c.ch = make(chan string, int(capacity)) }
-func (c *Channel) Push(value string)   { c.ch <- value }
-func (c *Channel) Pop() string {
-	val, ok := <-c.ch
-	if !ok {
-		return ""
-	}
-	return val
-}
-func (c *Channel) Close() { close(c.ch) }
-
 //export create_WaitGroup_object
-func create_WaitGroup_object() C.uintptr_t { return registerGoObject(&WaitGroup{OwnerPoolID: 0}) }
+func create_WaitGroup_object() C.uintptr_t {
+	return registerGoObject(&supervisor.WaitGroup{OwnerPoolID: 0})
+}
 
 //export create_Channel_object
-func create_Channel_object() C.uintptr_t { return registerGoObject(&Channel{OwnerPoolID: 0}) }
+func create_Channel_object() C.uintptr_t {
+	return registerGoObject(&supervisor.Channel{OwnerPoolID: 0})
+}
 
 //export add_wrapper
 func add_wrapper(handle C.uintptr_t, delta int64) {
-	getGoObject(uintptr(handle)).(*WaitGroup).Add(delta)
+	getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Add(delta)
 }
 
 //export done_wrapper
-func done_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*WaitGroup).Done() }
+func done_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Done() }
 
 //export wait_wrapper
-func wait_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*WaitGroup).Wait() }
+func wait_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Wait() }
 
 //export init_wrapper
 func init_wrapper(handle C.uintptr_t, capacity int64) {
-	getGoObject(uintptr(handle)).(*Channel).Init(capacity)
+	getGoObject(uintptr(handle)).(*supervisor.Channel).Init(capacity)
 }
 
 //export push_wrapper
 func push_wrapper(handle C.uintptr_t, value *C.char, valueLen C.int) {
-	getGoObject(uintptr(handle)).(*Channel).Push(C.GoStringN(value, valueLen))
+	getGoObject(uintptr(handle)).(*supervisor.Channel).Push(C.GoStringN(value, valueLen))
 }
 
 //export pop_wrapper
 func pop_wrapper(handle C.uintptr_t) *C.char {
-	return C.CString(getGoObject(uintptr(handle)).(*Channel).Pop())
+	return C.CString(getGoObject(uintptr(handle)).(*supervisor.Channel).Pop())
 }
 
 //export close_wrapper
-func close_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*Channel).Close() }
+func close_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.Channel).Close() }
 
 func convertPayloadToGo(payload unsafe.Pointer) (map[string]any, error) {
 	if payload == nil {
@@ -607,52 +560,4 @@ func zvalArrayToMap(ht *C.HashTable) map[string]any {
 		C.c_zend_hash_move_forward_ex(ht, &pos)
 	}
 	return result
-}
-
-func extractChannels(payload map[string]any) (*Channel, *Channel, uintptr) {
-	var retCh, errCh *Channel
-	var retHandle uintptr
-	if rawRetCh, ok := payload["return_channel"]; ok {
-		if h := castToHandle(rawRetCh); h != 0 {
-			retHandle = h
-			if obj := getGoObject(h); obj != nil {
-				if ch, ok := obj.(*Channel); ok {
-					retCh = ch
-				}
-			}
-		}
-	}
-	if rawErrCh, ok := payload["error_channel"]; ok {
-		if h := castToHandle(rawErrCh); h != 0 {
-			if obj := getGoObject(h); obj != nil {
-				if ch, ok := obj.(*Channel); ok {
-					errCh = ch
-				}
-			}
-		}
-	}
-	return retCh, errCh, retHandle
-}
-
-func getWaitGroup(payload map[string]any) *WaitGroup {
-	if rawHandle, ok := payload["wait_group"]; ok {
-		if handle := castToHandle(rawHandle); handle != 0 {
-			if obj := getGoObject(handle); obj != nil {
-				if wg, ok := obj.(*WaitGroup); ok {
-					return wg
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func pushErrorToChannels(ret *Channel, err *Channel, msg string) {
-	if ret != nil {
-		errJson, _ := json.Marshal(map[string]string{"status": "error", "message": msg})
-		ret.Push(string(errJson))
-	}
-	if err != nil {
-		err.Push(msg)
-	}
 }

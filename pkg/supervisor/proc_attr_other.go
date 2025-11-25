@@ -1,6 +1,6 @@
 //go:build !linux
 
-package pogo
+package supervisor
 
 import (
 	"os/exec"

@@ -3,6 +3,7 @@
 #include <zend_exceptions.h>
 #include "pogo.h"
 #include "pogo_arginfo.h"
+#include "pogo_consts.h" // Generated Constants
 #include "_cgo_export.h"
 
 // SHM Includes
@@ -227,6 +228,7 @@ PHP_FUNCTION(Go_start_worker_pool)
     zend_long shm_size = 64 * 1024 * 1024;
     zend_long ipc_timeout_ms = 500;
     zend_long scale_latency_ms = 50;
+    zend_long job_timeout_ms = 0; // Default 0 (No Timeout)
 
     if (options) {
         HashTable *ht = Z_ARRVAL_P(options);
@@ -240,9 +242,12 @@ PHP_FUNCTION(Go_start_worker_pool)
         if ((val = zend_hash_str_find(ht, "scale_latency_ms", sizeof("scale_latency_ms") - 1)) != NULL && Z_TYPE_P(val) == IS_LONG) {
             scale_latency_ms = Z_LVAL_P(val);
         }
+        if ((val = zend_hash_str_find(ht, "job_timeout_ms", sizeof("job_timeout_ms") - 1)) != NULL && Z_TYPE_P(val) == IS_LONG) {
+            job_timeout_ms = Z_LVAL_P(val);
+        }
     }
 
-    start_workers_wrapper(entrypoint, (int)entry_len, min_workers, max_workers, max_jobs, shm_size, ipc_timeout_ms, scale_latency_ms);
+    start_workers_wrapper(entrypoint, (int)entry_len, min_workers, max_workers, max_jobs, shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
 PHP_FUNCTION(Go_dispatch)
@@ -490,6 +495,7 @@ PHP_METHOD(Go_Runtime_Pool, start) {
     zend_long shm_size = 64 * 1024 * 1024;
     zend_long ipc_timeout_ms = 500;
     zend_long scale_latency_ms = 50;
+    zend_long job_timeout_ms = 0;
 
     if (options && Z_TYPE_P(options) == IS_ARRAY) {
         HashTable *ht = Z_ARRVAL_P(options);
@@ -503,9 +509,12 @@ PHP_METHOD(Go_Runtime_Pool, start) {
         if ((val = zend_hash_str_find(ht, "scale_latency_ms", sizeof("scale_latency_ms") - 1)) != NULL && Z_TYPE_P(val) == IS_LONG) {
             scale_latency_ms = Z_LVAL_P(val);
         }
+        if ((val = zend_hash_str_find(ht, "job_timeout_ms", sizeof("job_timeout_ms") - 1)) != NULL && Z_TYPE_P(val) == IS_LONG) {
+            job_timeout_ms = Z_LVAL_P(val);
+        }
     }
 
-    start_pool_wrapper(poolID, Z_STRVAL_P(entrypoint), (int)Z_STRLEN_P(entrypoint), Z_LVAL_P(min), Z_LVAL_P(max), Z_LVAL_P(max_jobs), shm_size, ipc_timeout_ms, scale_latency_ms);
+    start_pool_wrapper(poolID, Z_STRVAL_P(entrypoint), (int)Z_STRLEN_P(entrypoint), Z_LVAL_P(min), Z_LVAL_P(max), Z_LVAL_P(max_jobs), shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
 PHP_METHOD(Go_Runtime_Pool, shutdown) {

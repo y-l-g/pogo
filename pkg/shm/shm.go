@@ -1,15 +1,14 @@
-package pogo
+package shm
 
 import (
 	"fmt"
 	"os"
 	"sync"
-	"syscall"
 )
 
 // AllocationMeta tracks the lifecycle of a shared memory region.
 type AllocationMeta struct {
-	Offset int64 // Logical offset (always increases)
+	Offset int64 // Logical offset
 	Size   int64
 	Freed  bool
 }
@@ -20,10 +19,12 @@ type SharedMemory struct {
 	data []byte
 	Size int64
 
-	mu          sync.Mutex
-	head        int64            // Oldest occupied byte (logical)
-	tail        int64            // Next free byte (logical)
-	allocations []AllocationMeta // FIFO queue of active allocations
+	mu        sync.Mutex
+	head      int64             // Oldest occupied byte (logical)
+	tail      int64             // Next free byte (logical)
+	queue     []*AllocationMeta // FIFO queue of all allocations
+	queueHead int               // Index of the first item in queue
+	lookup    map[int64]*AllocationMeta
 }
 
 func NewSharedMemory(size int64) (*SharedMemory, error) {
@@ -40,28 +41,27 @@ func NewSharedMemory(size int64) (*SharedMemory, error) {
 		return nil, err
 	}
 
-	// Map it
-	data, err := syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	// Map it (OS-specific implementation)
+	data, err := mapFile(f, size)
 	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(f.Name())
 		return nil, err
 	}
 
-	// Unlink immediately (file stays open, but name is gone)
+	// Unlink immediately
 	_ = os.Remove(f.Name())
 
 	s := &SharedMemory{
-		file:        f,
-		data:        data,
-		Size:        size,
-		allocations: make([]AllocationMeta, 0, 128),
-		// Reserve first 8 bytes for Signature "GOSHM"
-		head: 8,
-		tail: 8,
+		file:   f,
+		data:   data,
+		Size:   size,
+		queue:  make([]*AllocationMeta, 0, 128),
+		lookup: make(map[int64]*AllocationMeta),
+		head:   8, // Reserve signature
+		tail:   8,
 	}
 
-	// Initialize signature
 	if len(s.data) >= 8 {
 		s.data[0] = 0x02
 		copy(s.data[1:], []byte("GOSHM"))
@@ -72,7 +72,7 @@ func NewSharedMemory(size int64) (*SharedMemory, error) {
 
 func (s *SharedMemory) Close() error {
 	if s.data != nil {
-		_ = syscall.Munmap(s.data)
+		_ = unmapFile(s.data)
 	}
 	if s.file != nil {
 		return s.file.Close()
@@ -86,20 +86,25 @@ func (s *SharedMemory) File() *os.File {
 
 // compress advances the Head if the oldest allocations are Freed.
 func (s *SharedMemory) compress() {
-	consumedCount := 0
-	for i := range s.allocations {
-		if s.allocations[i].Freed {
-			s.head += s.allocations[i].Size
-			consumedCount++
+	// 1. Advance logical head
+	for s.queueHead < len(s.queue) {
+		meta := s.queue[s.queueHead]
+		if meta.Freed {
+			s.head += meta.Size
+			// Clear pointer to help GC
+			s.queue[s.queueHead] = nil
+			s.queueHead++
 		} else {
 			break
 		}
 	}
 
-	if consumedCount > 0 {
-		// Drop freed items
-		// Optimization: Re-slice. Underlying array will be reused when appended to.
-		s.allocations = s.allocations[consumedCount:]
+	// 2. Compaction (Prevent slice from growing indefinitely)
+	if s.queueHead > 1024 && s.queueHead > len(s.queue)/2 {
+		active := len(s.queue) - s.queueHead
+		copy(s.queue, s.queue[s.queueHead:])
+		s.queue = s.queue[:active]
+		s.queueHead = 0
 	}
 }
 
@@ -125,23 +130,22 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 
 	// 3. Check for Wrap-Around Fragmentation
 	if physHead+len64 > s.Size {
-		// We must wrap to 0.
 		pad := s.Size - physHead
 
-		// Ensure space for Padding + Data
 		if len64+pad > free {
 			return 0, fmt.Errorf("shm full (fragmentation)")
 		}
 
-		// Register Dummy Allocation for Padding (Auto-freed)
-		// It blocks 'Head' until it reaches the front, then instantly vanishes.
-		s.allocations = append(s.allocations, AllocationMeta{
+		// Insert Padding Meta (Auto-Freed)
+		padMeta := &AllocationMeta{
 			Offset: s.tail,
 			Size:   pad,
 			Freed:  true,
-		})
-
+		}
+		s.queue = append(s.queue, padMeta)
 		s.tail += pad
+
+		physHead = 0
 	}
 
 	// 4. Final Check
@@ -153,12 +157,14 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 
 	// 5. Commit
 	offset := s.tail
-	s.allocations = append(s.allocations, AllocationMeta{
+	meta := &AllocationMeta{
 		Offset: offset,
 		Size:   len64,
 		Freed:  false,
-	})
+	}
 
+	s.queue = append(s.queue, meta)
+	s.lookup[offset%s.Size] = meta
 	s.tail += len64
 
 	return offset % s.Size, nil
@@ -168,18 +174,11 @@ func (s *SharedMemory) Free(physOffset int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Find the active allocation with this physical start offset.
-	// Since overlapping active allocations are impossible, physOffset is unique among active items.
-	for i := range s.allocations {
-		if !s.allocations[i].Freed {
-			if s.allocations[i].Offset%s.Size == physOffset {
-				s.allocations[i].Freed = true
-				break
-			}
-		}
+	if meta, ok := s.lookup[physOffset]; ok {
+		meta.Freed = true
+		delete(s.lookup, physOffset)
+		s.compress()
 	}
-
-	s.compress()
 }
 
 func (s *SharedMemory) WriteAt(offset int64, data []byte) error {

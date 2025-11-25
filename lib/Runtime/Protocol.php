@@ -4,17 +4,13 @@ declare(strict_types=1);
 
 namespace Go\Runtime;
 
+// Ensure constants interface is loaded when Protocol is loaded manually
+require_once __DIR__ . '/ProtocolConstants.php';
+
 use Throwable;
 
-class Protocol
+class Protocol implements ProtocolConstants
 {
-    public const TYPE_DATA = 0x00;
-    public const TYPE_ERROR = 0x01;
-    public const TYPE_FATAL = 0x02;
-    public const TYPE_HELLO = 0x03;
-    public const TYPE_SHM = 0x04;
-    public const TYPE_SHUTDOWN = 0x09;
-
     public const IO_TIMEOUT_SEC = 10;
     public const IO_TIMEOUT_USEC = 0;
 
@@ -25,41 +21,49 @@ class Protocol
     /** @var resource */
     private $err;
 
-    private int $shmFd;
+    private int $shmFd = -1;
     private bool $useMsgPack = false;
     private bool $useShm = false;
 
     public function __construct()
     {
-        $fdIn = getenv('FRANKENPHP_WORKER_PIPE_IN') ?: '3';
-        $fdOut = getenv('FRANKENPHP_WORKER_PIPE_OUT') ?: '4';
-        $shmFd = getenv('FRANKENPHP_WORKER_SHM_FD') ?: '5';
+        $this->err = STDERR;
 
-        set_error_handler(function ($severity, $message) {
-            throw new IOException("Failed to open IPC pipes: $message");
-        });
+        $envIn = getenv('FRANKENPHP_WORKER_PIPE_IN');
+        $envOut = getenv('FRANKENPHP_WORKER_PIPE_OUT');
+        $envShm = getenv('FRANKENPHP_WORKER_SHM_FD');
 
-        try {
-            $this->in = fopen("php://fd/$fdIn", 'rb');
-            $this->out = fopen("php://fd/$fdOut", 'wb');
-        } finally {
-            restore_error_handler();
-        }
-
-        if ($this->in === false || $this->out === false) {
+        if ($envIn === false || $envOut === false) {
+            // Manual/Interactive Mode (STDIN/STDOUT)
             $this->in = STDIN;
             $this->out = STDOUT;
         } else {
+            // Supervisor Mode
+            set_error_handler(function ($severity, $message) {
+                throw new IOException("Failed to open IPC pipes: $message");
+            });
+
+            try {
+                $this->in = fopen("php://fd/$envIn", 'rb');
+                $this->out = fopen("php://fd/$envOut", 'wb');
+            } finally {
+                restore_error_handler();
+            }
+
+            if ($this->in === false || $this->out === false) {
+                throw new IOException("Failed to open explicit IPC FDs ($envIn, $envOut)");
+            }
+
             stream_set_write_buffer($this->out, 0);
             stream_set_read_buffer($this->in, 0);
         }
 
-        $this->err = STDERR;
-
         stream_set_blocking($this->in, false);
         stream_set_blocking($this->out, false);
 
-        $this->shmFd = (int) $shmFd;
+        if ($envShm !== false) {
+            $this->shmFd = (int) $envShm;
+        }
     }
 
     public function run(): void
@@ -212,6 +216,7 @@ class Protocol
     {
         $canMsgPack = extension_loaded('msgpack');
         $shmAvailable = ($hello['shm_available'] ?? false)
+            && ($this->shmFd !== -1)
             && function_exists('Go\_shm_check')
             && \Go\_shm_check($this->shmFd);
 
