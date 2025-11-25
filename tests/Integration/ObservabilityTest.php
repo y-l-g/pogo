@@ -19,6 +19,11 @@ class ObservabilityTest extends TestCase
         $this->assertArrayHasKey('queue_depth', $stats);
         $this->assertArrayHasKey('p95_wait_ms', $stats);
         $this->assertArrayHasKey('map_size', $stats);
+
+        // Verify new SHM metrics
+        $this->assertArrayHasKey('shm_total_bytes', $stats);
+        $this->assertArrayHasKey('shm_used_bytes', $stats);
+        $this->assertArrayHasKey('shm_wasted_bytes', $stats);
     }
 
     public function testMetricsUpdate(): void
@@ -27,8 +32,6 @@ class ObservabilityTest extends TestCase
         \Go\async('AsyncJob', ['sleep' => 10, 'data' => 'stat'])->await();
 
         $stats = \Go\get_pool_stats(0);
-        // Since we just ran a job, p95 should be >= 0 (it starts at 0, but technically valid)
-        // Ideally we check if it updates, but without high load 0 is correct for <1ms wait.
         $this->assertGreaterThanOrEqual(0, $stats['p95_wait_ms']);
     }
 }

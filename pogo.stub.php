@@ -28,7 +28,7 @@ namespace Go {
 
     /**
      * Starts the default PHP worker pool.
-     * @param array $options Configuration options (shm_size, ipc_timeout_ms, scale_latency_ms).
+     * @param array $options Configuration options (shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms).
      */
     function start_worker_pool(string $entrypoint = "job_runner.php", int $minWorkers = 4, int $maxWorkers = 8, int $maxJobs = 0, array $options = []): void {}
 
@@ -43,7 +43,18 @@ namespace Go {
     /**
      * Returns statistics about a specific worker pool.
      * @param int $poolID The Pool ID (0 for default).
-     * @return array{active_workers: int, total_workers: int, queue_depth: int}
+     * @return array{
+     *     active_workers: int,
+     *     total_workers: int,
+     *     peak_workers: int,
+     *     queue_depth: int,
+     *     map_size: int,
+     *     p95_wait_ms: int,
+     *     shm_total_bytes?: int,
+     *     shm_used_bytes?: int,
+     *     shm_free_bytes?: int,
+     *     shm_wasted_bytes?: int
+     * }
      */
     function get_pool_stats(int $poolID = 0): array {}
 

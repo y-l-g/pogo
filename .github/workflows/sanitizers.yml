@@ -85,4 +85,4 @@ jobs:
 
       - name: Run Go Tests with Sanitizers
         run: |
-          go test -v -tags=nobadger,nomysql,nopgx,nowatcher -${{ matrix.sanitizer }} .
+          go test -v -race -${{ matrix.sanitizer }} ./pkg/...

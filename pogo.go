@@ -368,6 +368,53 @@ func poll_wrapper(chHandle C.uintptr_t) *C.char {
 func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) C.select_result {
 	handleSlice := unsafe.Slice((*uintptr)(unsafe.Pointer(handles)), int(count))
 
+	// Optimization: Fast path for single channel select (common case)
+	if count == 1 {
+		h := handleSlice[0]
+		if h != 0 {
+			obj := getGoObject(h)
+			if ch, ok := obj.(*supervisor.Channel); ok {
+				// Case 1: Non-blocking poll (timeout == 0 or -1?? PHP args say timeout=null is -1.0)
+				// PHP: select($cases, $timeout). Default timeout is null (-1.0).
+				// If timeout == 0.0, it's non-blocking.
+
+				if timeoutSeconds == 0 {
+					select {
+					case val, ok := <-ch.Ch:
+						if !ok {
+							return C.select_result{index: 0, value: C.CString(""), status: 0}
+						}
+						return C.select_result{index: 0, value: C.CString(val), status: 0}
+					default:
+						return C.select_result{index: -1, value: nil, status: 1} // "Timeout" / Not Ready
+					}
+				} else if timeoutSeconds > 0 {
+					select {
+					case val, ok := <-ch.Ch:
+						if !ok {
+							return C.select_result{index: 0, value: C.CString(""), status: 0}
+						}
+						return C.select_result{index: 0, value: C.CString(val), status: 0}
+					case <-time.After(time.Duration(float64(timeoutSeconds) * float64(time.Second))):
+						return C.select_result{index: -1, value: nil, status: 1}
+					}
+				} else {
+					// Blocking (timeout < 0)
+					select {
+					case val, ok := <-ch.Ch:
+						if !ok {
+							return C.select_result{index: 0, value: C.CString(""), status: 0}
+						}
+						return C.select_result{index: 0, value: C.CString(val), status: 0}
+					}
+				}
+			}
+		}
+		// If invalid handle/not a channel, assume default case which triggers immediately
+		return C.select_result{index: 0, value: C.CString(""), status: 0}
+	}
+
+	// Slow path: Reflection based select
 	var cases []reflect.SelectCase
 
 	for _, h := range handleSlice {

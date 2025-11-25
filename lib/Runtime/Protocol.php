@@ -68,16 +68,30 @@ class Protocol implements ProtocolConstants
 
     public function run(): void
     {
-        $this->handshake();
+        try {
+            $this->handshake();
+        } catch (Throwable $e) {
+            fwrite($this->err, "[Worker Fatal] Handshake failed: " . $e->getMessage() . "\n");
+            exit(1);
+        }
 
         while (true) {
-            $task = $this->read();
+            try {
+                $task = $this->read();
+            } catch (IOException $e) {
+                // Critical Transport Failure (Host gone, Pipe broke)
+                // We must exit immediately to prevent zombie loops.
+                fwrite($this->err, "[Worker Shutdown] Transport lost: " . $e->getMessage() . "\n");
+                exit(0);
+            } catch (Throwable $e) {
+                fwrite($this->err, "[Worker Fatal] Read cycle failed: " . $e->getMessage() . "\n");
+                exit(1);
+            }
+
             if ($task === null) {
                 break; // Shutdown signal received
             }
 
-            // Default "Simple Mode" Dispatcher
-            // This allows the one-liner from the README to work out of the box.
             try {
                 $jobClass = $task['job_class'] ?? null;
                 $payload = $task['payload'] ?? [];
@@ -85,7 +99,6 @@ class Protocol implements ProtocolConstants
                 if ($jobClass && class_exists($jobClass)) {
                     $job = new $jobClass();
 
-                    // Support standard JobInterface or duck-typing
                     if (method_exists($job, 'handle')) {
                         $result = $job->handle($payload);
                         $this->send($result);
@@ -93,11 +106,10 @@ class Protocol implements ProtocolConstants
                     }
                 }
 
-                // If class doesn't exist or has no handle method
                 $this->error("Protocol::run() could not execute job: " . ($jobClass ?? 'unknown'));
 
             } catch (Throwable $e) {
-                // Catch application exceptions and forward to Go Host
+                // Application-level error. Report and continue.
                 $this->error($e->getMessage(), 'error', false, $e->getTraceAsString());
             }
         }
@@ -144,7 +156,6 @@ class Protocol implements ProtocolConstants
 
         if ($result === false) {
             $err = error_get_last();
-            // Interrupted system call is common during shutdown signal
             if (isset($err['message']) && stripos($err['message'], 'interrupted') !== false) {
                 return null;
             }
@@ -239,9 +250,6 @@ class Protocol implements ProtocolConstants
         }
     }
 
-    /**
-     * @return mixed
-     */
     private function decode(string $data)
     {
         if ($this->useMsgPack) {
@@ -250,9 +258,6 @@ class Protocol implements ProtocolConstants
         return json_decode($data, true);
     }
 
-    /**
-     * @param mixed $result
-     */
     public function send($result): void
     {
         $this->writePacket(['status' => 'success', 'result' => $result], self::TYPE_DATA);
@@ -275,8 +280,8 @@ class Protocol implements ProtocolConstants
         try {
             $this->writePacket($payload, $packetType);
         } catch (IOException $e) {
-            // If we can't report the error (Broken Pipe), log to stderr and give up.
-            // Do NOT re-throw, or we enter an infinite loop in the worker's catch block.
+            // If we can't report the error, logging is all we can do.
+            // Critical: Do not re-throw IOException here to avoid main loop crash for app-level errors.
             fwrite($this->err, "[Worker Error] Failed to report error to Host: " . $e->getMessage() . "\n");
         }
     }
@@ -315,12 +320,10 @@ class Protocol implements ProtocolConstants
             $write = [$this->out];
             $except = null;
 
-            // Suppress warnings for interrupted syscalls
             $result = @stream_select($read, $write, $except, self::IO_TIMEOUT_SEC, self::IO_TIMEOUT_USEC);
 
             if ($result === false) {
                 $err = error_get_last();
-                // Detect Broken Pipe from select (rare, usually comes from fwrite)
                 if (isset($err['message']) && stripos($err['message'], 'broken pipe') !== false) {
                     throw new IOException("Broken pipe (Host disconnected)");
                 }
@@ -331,18 +334,14 @@ class Protocol implements ProtocolConstants
                 throw new IOException("Write Timeout (Host unresponsive)");
             }
 
-            // Suppress fwrite warnings (broken pipe) and check return value
             $bytes = @fwrite($this->out, substr($data, $written));
 
             if ($bytes === false || $bytes === 0) {
                 $err = error_get_last();
                 $msg = $err['message'] ?? 'Unknown';
-
-                // Check specifically for Broken pipe (errno 32)
                 if (stripos($msg, 'broken pipe') !== false) {
                     throw new IOException("Broken pipe (Host disconnected)");
                 }
-
                 throw new IOException("Pipe Write Failed: " . $msg);
             }
 
@@ -352,15 +351,34 @@ class Protocol implements ProtocolConstants
         @fflush($this->out);
     }
 
-    /**
-     * @return string|false
-     */
     private function readN(int $n)
     {
         $data = '';
         $bytesRead = 0;
 
         while ($bytesRead < $n) {
+            // Optimistic Read
+            $chunk = @fread($this->in, $n - $bytesRead);
+
+            if ($chunk === false) {
+                $err = error_get_last();
+                throw new IOException("IO Error Reading: " . ($err['message'] ?? 'Unknown'));
+            }
+
+            if ($chunk !== '') {
+                $data .= $chunk;
+                $bytesRead += strlen($chunk);
+                continue;
+            }
+
+            if (feof($this->in)) {
+                if ($bytesRead === 0) {
+                    return false;
+                }
+                throw new IOException("Unexpected EOF (Truncated Packet)");
+            }
+
+            // Wait for data
             $read = [$this->in];
             $write = null;
             $except = null;
@@ -370,7 +388,7 @@ class Protocol implements ProtocolConstants
             if ($result === false) {
                 $err = error_get_last();
                 if (isset($err['message']) && stripos($err['message'], 'interrupted') !== false) {
-                    return false; // Treat signal interrupt as EOF
+                    return false;
                 }
                 throw new IOException("Select failed during read: " . ($err['message'] ?? 'Unknown'));
             }
@@ -378,26 +396,6 @@ class Protocol implements ProtocolConstants
             if ($result === 0) {
                 throw new IOException("Read Timeout (Host unresponsive)");
             }
-
-            $chunk = @fread($this->in, $n - $bytesRead);
-
-            if ($chunk === false) {
-                $err = error_get_last();
-                throw new IOException("IO Error Reading: " . ($err['message'] ?? 'Unknown'));
-            }
-
-            if ($chunk === '') {
-                if (feof($this->in)) {
-                    if ($bytesRead === 0) {
-                        return false;
-                    }
-                    throw new IOException("Unexpected EOF (Truncated Packet)");
-                }
-                continue;
-            }
-
-            $data .= $chunk;
-            $bytesRead += strlen($chunk);
         }
 
         return $data;

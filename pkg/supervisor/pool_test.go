@@ -7,8 +7,6 @@ import (
 )
 
 func TestCrashResilience(t *testing.T) {
-	t.Parallel()
-
 	// Locate the test binary itself to use as the worker
 	exe, err := os.Executable()
 	if err != nil {
@@ -16,21 +14,15 @@ func TestCrashResilience(t *testing.T) {
 	}
 
 	// Set env vars for the pool to pick up
-	if err := os.Setenv("POGO_TEST_PHP_BINARY", exe); err != nil {
-		t.Fatalf("Failed to set env POGO_TEST_PHP_BINARY: %v", err)
-	}
+	os.Setenv("POGO_TEST_PHP_BINARY", exe)
 	// Set env vars for the worker process to behave correctly
-	if err := os.Setenv("GO_WANT_HELPER_PROCESS", "1"); err != nil {
-		t.Fatalf("Failed to set env GO_WANT_HELPER_PROCESS: %v", err)
-	}
-	if err := os.Setenv("POGO_MOCK_WORKER_MODE", "crash_immediate"); err != nil {
-		t.Fatalf("Failed to set env POGO_MOCK_WORKER_MODE: %v", err)
-	}
+	os.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	os.Setenv("POGO_MOCK_WORKER_MODE", "crash_immediate")
 
 	defer func() {
-		_ = os.Unsetenv("POGO_TEST_PHP_BINARY")
-		_ = os.Unsetenv("GO_WANT_HELPER_PROCESS")
-		_ = os.Unsetenv("POGO_MOCK_WORKER_MODE")
+		os.Unsetenv("POGO_TEST_PHP_BINARY")
+		os.Unsetenv("GO_WANT_HELPER_PROCESS")
+		os.Unsetenv("POGO_MOCK_WORKER_MODE")
 	}()
 
 	// 2. Initialize Pool
@@ -66,27 +58,19 @@ func TestCrashResilience(t *testing.T) {
 }
 
 func TestNormalOperation(t *testing.T) {
-	t.Parallel()
-
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("Failed to get executable: %v", err)
 	}
 
-	if err := os.Setenv("POGO_TEST_PHP_BINARY", exe); err != nil {
-		t.Fatalf("Failed to set env POGO_TEST_PHP_BINARY: %v", err)
-	}
-	if err := os.Setenv("GO_WANT_HELPER_PROCESS", "1"); err != nil {
-		t.Fatalf("Failed to set env GO_WANT_HELPER_PROCESS: %v", err)
-	}
-	if err := os.Setenv("POGO_MOCK_WORKER_MODE", "normal"); err != nil { // Normal echo mode
-		t.Fatalf("Failed to set env POGO_MOCK_WORKER_MODE: %v", err)
-	}
+	os.Setenv("POGO_TEST_PHP_BINARY", exe)
+	os.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	os.Setenv("POGO_MOCK_WORKER_MODE", "normal") // Normal echo mode
 
 	defer func() {
-		_ = os.Unsetenv("POGO_TEST_PHP_BINARY")
-		_ = os.Unsetenv("GO_WANT_HELPER_PROCESS")
-		_ = os.Unsetenv("POGO_MOCK_WORKER_MODE")
+		os.Unsetenv("POGO_TEST_PHP_BINARY")
+		os.Unsetenv("GO_WANT_HELPER_PROCESS")
+		os.Unsetenv("POGO_MOCK_WORKER_MODE")
 	}()
 
 	p := NewPool(1000)
@@ -102,15 +86,6 @@ func TestNormalOperation(t *testing.T) {
 
 	// Wait for boot
 	time.Sleep(500 * time.Millisecond)
-
-	// Dispatch a task
-	// payload := map[string]any{ "hello": "world" } // Unused
-
-	// Since we can't easily use p.submit/async without the CGO layer creating channels,
-	// we must manually inject a GoTask if we want to test dispatch logic pure-Go.
-	// However, Pool is designed to work with Channels created via CGO handles.
-	// Mocking that entirely in pure Go is hard because Pool calls getHandleValue.
-	// But we can verify the worker started by checking stats.
 
 	stats := p.GetStats()
 	if stats["total_workers"] != 1 {

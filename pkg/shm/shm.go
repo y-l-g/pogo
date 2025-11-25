@@ -8,9 +8,10 @@ import (
 
 // AllocationMeta tracks the lifecycle of a shared memory region.
 type AllocationMeta struct {
-	Offset int64 // Logical offset
-	Size   int64
-	Freed  bool
+	Offset    int64 // Logical offset
+	Size      int64
+	Freed     bool
+	IsPadding bool
 }
 
 // SharedMemory implements a Ring Buffer backed by a Memory-Mapped File.
@@ -22,6 +23,7 @@ type SharedMemory struct {
 	mu        sync.Mutex
 	head      int64             // Oldest occupied byte (logical)
 	tail      int64             // Next free byte (logical)
+	wasted    int64             // Bytes currently consumed by padding
 	queue     []*AllocationMeta // FIFO queue of all allocations
 	queueHead int               // Index of the first item in queue
 	lookup    map[int64]*AllocationMeta
@@ -91,6 +93,9 @@ func (s *SharedMemory) compress() {
 		meta := s.queue[s.queueHead]
 		if meta.Freed {
 			s.head += meta.Size
+			if meta.IsPadding {
+				s.wasted -= meta.Size
+			}
 			// Clear pointer to help GC
 			s.queue[s.queueHead] = nil
 			s.queueHead++
@@ -138,14 +143,16 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 
 		// Insert Padding Meta (Auto-Freed)
 		padMeta := &AllocationMeta{
-			Offset: s.tail,
-			Size:   pad,
-			Freed:  true,
+			Offset:    s.tail,
+			Size:      pad,
+			Freed:     true,
+			IsPadding: true,
 		}
 		s.queue = append(s.queue, padMeta)
 		s.tail += pad
+		s.wasted += pad
 
-		// Fix: Removed ineffectual assignment to physHead
+		physHead = 0
 	}
 
 	// 4. Final Check
@@ -187,4 +194,25 @@ func (s *SharedMemory) WriteAt(offset int64, data []byte) error {
 	}
 	copy(s.data[offset:], data)
 	return nil
+}
+
+// Stats structure
+type ShmStats struct {
+	TotalBytes  int64
+	UsedBytes   int64
+	FreeBytes   int64
+	WastedBytes int64
+}
+
+func (s *SharedMemory) GetStats() ShmStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	used := s.tail - s.head
+	return ShmStats{
+		TotalBytes:  s.Size,
+		UsedBytes:   used,
+		FreeBytes:   s.Size - used,
+		WastedBytes: s.wasted,
+	}
 }
