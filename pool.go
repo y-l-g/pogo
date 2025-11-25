@@ -1,6 +1,7 @@
 package pogo
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -617,6 +618,9 @@ func (p *Pool) spawnWorker() *phpWorker {
 
 	cmd := exec.CommandContext(p.ctx, bin, args...)
 
+	var stderrCapture bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrCapture)
+
 	configureCmd(cmd)
 
 	parentRead, childWrite, _ := os.Pipe()
@@ -694,7 +698,12 @@ func (p *Pool) spawnWorker() *phpWorker {
 	}()
 
 	if err := p.performHandshake(worker); err != nil {
-		log.Printf("[Pool %d] Handshake failed #%d: %v", p.ID, id, err)
+		output := stderrCapture.String()
+		if output == "" {
+			output = "<no output>"
+		}
+		log.Printf("[Pool %d] Handshake failed #%d: %v. \n--- Worker Startup Error ---\n%s\n----------------------------",
+			p.ID, id, err, output)
 		if err == io.EOF {
 			return nil
 		}
