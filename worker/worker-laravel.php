@@ -5,7 +5,7 @@ ini_set('display_errors', 'stderr');
 require __DIR__ . '/../lib/Runtime/Protocol.php';
 require __DIR__ . '/../vendor/autoload.php';
 
-use Go\Runtime\Protocol;
+use Pogo\Runtime\Protocol;
 
 $protocol = new Protocol();
 
@@ -46,7 +46,7 @@ while (true) {
         $job = $sandbox->make($jobClass);
 
         // Execute
-        if ($job instanceof \Go\Contract\JobInterface) {
+        if ($job instanceof \Pogo\Contract\JobInterface) {
             $result = $job->handle($payload);
         } else {
             $result = $sandbox->call([$job, 'handle'], $payload);

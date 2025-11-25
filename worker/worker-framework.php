@@ -14,7 +14,7 @@ require_once __DIR__ . '/../tests/Mocks/Framework/Logger.php';
 require_once __DIR__ . '/../tests/Jobs/FrameworkJob.php';
 require_once __DIR__ . '/../tests/Jobs/DiJob.php';
 
-use Go\Runtime\Protocol;
+use Pogo\Runtime\Protocol;
 use Framework\Container;
 use Framework\Logger;
 
@@ -55,7 +55,7 @@ while (true) {
         $job = $container->make($jobClass);
 
         // Dispatch
-        if ($job instanceof \Go\Contract\JobInterface) {
+        if ($job instanceof \Pogo\Contract\JobInterface) {
             $result = $job->handle($payload);
         } elseif (method_exists($job, 'handle')) {
             $result = $container->call([$job, 'handle'], $payload);
@@ -71,7 +71,7 @@ while (true) {
         $protocol->send($result);
 
         // --- Resettable Logic ---
-        if ($job instanceof \Go\Contract\Resettable) {
+        if ($job instanceof \Pogo\Contract\Resettable) {
             $job->reset();
         }
         // ------------------------

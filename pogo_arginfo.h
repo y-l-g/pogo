@@ -33,7 +33,7 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Go_dispatch, 0, 2, IS_VOID, 0)
 	ZEND_ARG_TYPE_INFO(0, payload, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_Go_dispatch_task, 0, 1, Go\\Future, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_Go_dispatch_task, 0, 1, Pogo\\Future, 0)
 	ZEND_ARG_TYPE_INFO(0, taskName, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, payload, IS_ARRAY, 0, "[]")
 ZEND_END_ARG_INFO()
@@ -43,7 +43,7 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Go_select, 0, 1, IS_ARRAY, 1)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, timeout, IS_DOUBLE, 1, "null")
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_Go_async, 0, 1, Go\\Future, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_Go_async, 0, 1, Pogo\\Future, 0)
 	ZEND_ARG_TYPE_INFO(0, class, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, args, IS_ARRAY, 0, "[]")
 ZEND_END_ARG_INFO()
@@ -103,7 +103,7 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_class_Go_Runtime_Pool_shutdown arginfo_Go__gopogo_init
 
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_Go_Runtime_Pool_submit, 0, 1, Go\\Future, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_Go_Runtime_Pool_submit, 0, 1, Pogo\\Future, 0)
 	ZEND_ARG_TYPE_INFO(0, jobClass, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, args, IS_ARRAY, 0, "[]")
 ZEND_END_ARG_INFO()
@@ -216,7 +216,7 @@ static zend_class_entry *register_class_Go_Future(void)
 	zval property_channel_default_value;
 	ZVAL_NULL(&property_channel_default_value);
 	zend_string *property_channel_name = zend_string_init("channel", sizeof("channel") - 1, 1);
-	zend_string *property_channel_class_Go_Channel = zend_string_init("Go\\Channel", sizeof("Go\\Channel")-1, 1);
+	zend_string *property_channel_class_Go_Channel = zend_string_init("Pogo\\Channel", sizeof("Pogo\\Channel")-1, 1);
 	zend_declare_typed_property(class_entry, property_channel_name, &property_channel_default_value, ZEND_ACC_PRIVATE, NULL, (zend_type) ZEND_TYPE_INIT_CLASS(property_channel_class_Go_Channel, 0, MAY_BE_NULL));
 	zend_string_release(property_channel_name);
 
@@ -267,7 +267,7 @@ static zend_class_entry *register_class_Go_Contract_Resettable(void)
 {
 	zend_class_entry ce, *class_entry;
 
-	INIT_NS_CLASS_ENTRY(ce, "Go\\Contract", "Resettable", class_Go_Contract_Resettable_methods);
+	INIT_NS_CLASS_ENTRY(ce, "Pogo\\Contract", "Resettable", class_Go_Contract_Resettable_methods);
 	class_entry = zend_register_internal_interface(&ce);
 
 	return class_entry;
@@ -277,7 +277,7 @@ static zend_class_entry *register_class_Go_Runtime_Pool(void)
 {
 	zend_class_entry ce, *class_entry;
 
-	INIT_NS_CLASS_ENTRY(ce, "Go\\Runtime", "Pool", class_Go_Runtime_Pool_methods);
+	INIT_NS_CLASS_ENTRY(ce, "Pogo\\Runtime", "Pool", class_Go_Runtime_Pool_methods);
 	class_entry = zend_register_internal_class_with_flags(&ce, NULL, 0);
 
 	return class_entry;

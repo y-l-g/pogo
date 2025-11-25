@@ -5,7 +5,7 @@
   "license": "MIT",
   "autoload": {
     "psr-4": {
-      "Go\\": "lib/"
+      "Pogo\\": "lib/"
     },
     "files": [
       "stubs/Pogo.php"

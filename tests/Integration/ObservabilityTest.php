@@ -8,12 +8,12 @@ class ObservabilityTest extends TestCase
 {
     public static function setUpBeforeClass(): void
     {
-        \Go\start_worker_pool("worker/job_runner.php", 1, 1);
+        \Pogo\start_worker_pool("worker/job_runner.php", 1, 1);
     }
 
     public function testStatsStructure(): void
     {
-        $stats = \Go\get_pool_stats(0);
+        $stats = \Pogo\get_pool_stats(0);
 
         $this->assertArrayHasKey('active_workers', $stats);
         $this->assertArrayHasKey('queue_depth', $stats);
@@ -29,9 +29,9 @@ class ObservabilityTest extends TestCase
     public function testMetricsUpdate(): void
     {
         // Run a job to generate metrics
-        \Go\async('AsyncJob', ['sleep' => 10, 'data' => 'stat'])->await();
+        \Pogo\async('AsyncJob', ['sleep' => 10, 'data' => 'stat'])->await();
 
-        $stats = \Go\get_pool_stats(0);
+        $stats = \Pogo\get_pool_stats(0);
         $this->assertGreaterThanOrEqual(0, $stats['p95_wait_ms']);
     }
 }

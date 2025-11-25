@@ -3,16 +3,16 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\Channel;
-use Go\WaitGroup;
-use Go\Future;
+use Pogo\Channel;
+use Pogo\WaitGroup;
+use Pogo\Future;
 
 class CoreTest extends TestCase
 {
     public static function setUpBeforeClass(): void
     {
         // Start the default pool for core tests
-        \Go\start_worker_pool("worker/job_runner.php", 2, 4, 0, ['shm_size' => 16 * 1024 * 1024]);
+        \Pogo\start_worker_pool("worker/job_runner.php", 2, 4, 0, ['shm_size' => 16 * 1024 * 1024]);
         usleep(100000); // Wait for boot
     }
 
@@ -21,12 +21,12 @@ class CoreTest extends TestCase
         $this->assertTrue(class_exists(Channel::class));
         $this->assertTrue(class_exists(WaitGroup::class));
         $this->assertTrue(class_exists(Future::class));
-        $this->assertTrue(function_exists('Go\dispatch'));
+        $this->assertTrue(function_exists('Pogo\dispatch'));
     }
 
     public function testBasicAsyncExecution(): void
     {
-        $f = \Go\async('EchoJob', ['message' => 'PHPUnit Core']);
+        $f = \Pogo\async('EchoJob', ['message' => 'PHPUnit Core']);
         $result = $f->await(2.0);
 
         $this->assertIsArray($result);
@@ -41,7 +41,7 @@ class CoreTest extends TestCase
         $start = microtime(true);
 
         for ($i = 0; $i < $count; $i++) {
-            $futures[] = \Go\async('AsyncJob', ['sleep' => 200, 'data' => $i]);
+            $futures[] = \Pogo\async('AsyncJob', ['sleep' => 200, 'data' => $i]);
         }
 
         $results = [];

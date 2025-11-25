@@ -7,7 +7,7 @@ require_once __DIR__ . '/../Mocks/Framework/Logger.php';
 use Framework\Container;
 use Framework\Logger;
 
-class FrameworkJob implements \Go\Contract\JobInterface
+class FrameworkJob implements \Pogo\Contract\JobInterface
 {
     private $logger;
 

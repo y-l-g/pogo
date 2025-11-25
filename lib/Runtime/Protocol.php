@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Go\Runtime;
+namespace Pogo\Runtime;
 
 // Ensure constants interface is loaded when Protocol is loaded manually
 require_once __DIR__ . '/ProtocolConstants.php';
@@ -204,13 +204,13 @@ class Protocol implements ProtocolConstants
                 $offset = $shmParts['offset'];
                 $length = $shmParts['length'];
 
-                if (!$this->useMsgPack && function_exists('Go\_shm_decode')) {
+                if (!$this->useMsgPack && function_exists('Pogo\_shm_decode')) {
                     /** @var mixed */
-                    return \Go\_shm_decode($this->shmFd, $offset, $length);
+                    return \Pogo\_shm_decode($this->shmFd, $offset, $length);
                 }
 
-                if (function_exists('Go\_shm_read')) {
-                    $realBody = \Go\_shm_read($this->shmFd, $offset, $length);
+                if (function_exists('Pogo\_shm_read')) {
+                    $realBody = \Pogo\_shm_read($this->shmFd, $offset, $length);
                     return $this->decode($realBody);
                 } else {
                     throw new IOException("SHM packet received but infrastructure missing");
@@ -228,8 +228,8 @@ class Protocol implements ProtocolConstants
         $canMsgPack = extension_loaded('msgpack');
         $shmAvailable = ($hello['shm_available'] ?? false)
             && ($this->shmFd !== -1)
-            && function_exists('Go\_shm_check')
-            && \Go\_shm_check($this->shmFd);
+            && function_exists('Pogo\_shm_check')
+            && \Pogo\_shm_check($this->shmFd);
 
         $ack = [
             'type' => 'HELLO_ACK',

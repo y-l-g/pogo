@@ -3,8 +3,8 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\WorkerException;
-use Go\Runtime\Protocol;
+use Pogo\WorkerException;
+use Pogo\Runtime\Protocol;
 use ReflectionClass;
 
 class ProtocolTest extends TestCase
@@ -14,16 +14,16 @@ class ProtocolTest extends TestCase
         // Ensure pool is running (idempotent if already started in CoreTest,
         // but different settings might be ignored if singleton pool 0 is active.
         // For this phase, we assume the shared pool 0 is sufficient).
-        \Go\start_worker_pool("worker/job_runner.php", 1, 2);
+        \Pogo\start_worker_pool("worker/job_runner.php", 1, 2);
     }
 
     public function testSharedMemoryAccess(): void
     {
-        if (!function_exists('Go\_shm_read')) {
+        if (!function_exists('Pogo\_shm_read')) {
             $this->markTestSkipped('Extension missing SHM functions');
         }
 
-        $f = \Go\async('ShmCheckJob', []);
+        $f = \Pogo\async('ShmCheckJob', []);
         $result = $f->await(1.0);
 
         $this->assertEquals('GOSHM', $result);
@@ -36,7 +36,7 @@ class ProtocolTest extends TestCase
         $data = str_repeat('X', $size);
         $md5 = md5($data);
 
-        $f = \Go\async('ShmLargeJob', ['blob' => $data]);
+        $f = \Pogo\async('ShmLargeJob', ['blob' => $data]);
         $res = $f->await(5.0);
 
         $this->assertEquals($size, $res['received_len']);
@@ -50,7 +50,7 @@ class ProtocolTest extends TestCase
         $this->expectExceptionMessage('Response too large');
 
         // LargePayloadJob returns 20MB, limit is 16MB
-        $f = \Go\async('LargePayloadJob', []);
+        $f = \Pogo\async('LargePayloadJob', []);
         $f->await(5.0);
     }
 

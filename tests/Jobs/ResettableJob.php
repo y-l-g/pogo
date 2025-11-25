@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../../lib/Contract/Resettable.php';
 
-use Go\Contract\Resettable;
+use Pogo\Contract\Resettable;
 
 class ResettableJob implements Resettable
 {

@@ -3,7 +3,7 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\Runtime\Pool;
+use Pogo\Runtime\Pool;
 
 class MultiPoolTest extends TestCase
 {

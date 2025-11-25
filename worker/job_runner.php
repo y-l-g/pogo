@@ -15,11 +15,11 @@ if (file_exists($vendorAutoload)) {
     $loaded = true;
 }
 
-// 2. Resilience: Check if Go\Runtime\Protocol is actually available.
+// 2. Resilience: Check if Pogo\Runtime\Protocol is actually available.
 // If the vendor/autoload.php was a mock (from tests) or incomplete, we must fallback.
-if (!class_exists('Go\\Runtime\\Protocol')) {
+if (!class_exists('Pogo\\Runtime\\Protocol')) {
     spl_autoload_register(function ($class) {
-        $prefix = 'Go\\';
+        $prefix = 'Pogo\\';
         $baseDir = __DIR__ . '/../lib/';
 
         if (strncmp($prefix, $class, strlen($prefix)) === 0) {
@@ -46,12 +46,12 @@ if (is_dir($testsDir)) {
     });
 }
 
-use Go\Runtime\Protocol;
-use Go\Runtime\IOException;
+use Pogo\Runtime\Protocol;
+use Pogo\Runtime\IOException;
 
 // Ensure Protocol is loaded before instantiating
 if (!class_exists(Protocol::class)) {
-    fwrite(STDERR, "[Worker Fatal] Failed to load Go\\Runtime\\Protocol. Check autoloading.\n");
+    fwrite(STDERR, "[Worker Fatal] Failed to load Pogo\\Runtime\\Protocol. Check autoloading.\n");
     exit(1);
 }
 
@@ -128,7 +128,7 @@ while (true) {
 
         $protocol->send($result);
 
-        if ($job instanceof \Go\Contract\Resettable) {
+        if ($job instanceof \Pogo\Contract\Resettable) {
             $job->reset();
         }
 

@@ -1,14 +1,14 @@
 <?php
 
 // worker/worker-symfony.php
-// Reference implementation for a Symfony Worker using Go\Runtime\Protocol
+// Reference implementation for a Symfony Worker using Pogo\Runtime\Protocol
 
 ini_set('display_errors', 'stderr');
 
 require __DIR__ . '/../lib/Runtime/Protocol.php';
 require __DIR__ . '/../vendor/autoload.php';
 
-use Go\Runtime\Protocol;
+use Pogo\Runtime\Protocol;
 use App\Kernel;
 use Symfony\Component\Dotenv\Dotenv;
 

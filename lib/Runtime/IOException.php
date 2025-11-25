@@ -1,5 +1,7 @@
 <?php
 
-namespace Go\Runtime;
+namespace Pogo\Runtime;
 
-class IOException extends \RuntimeException {}
+class IOException extends \RuntimeException
+{
+}

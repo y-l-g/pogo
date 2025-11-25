@@ -3,15 +3,15 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\WorkerException;
-use Go\TimeoutException;
+use Pogo\WorkerException;
+use Pogo\TimeoutException;
 
 class ResilienceTest extends TestCase
 {
     public static function setUpBeforeClass(): void
     {
         // Start default pool with rotation enabled (MaxJobs = 2)
-        \Go\start_worker_pool("worker/job_runner.php", 1, 2, 2);
+        \Pogo\start_worker_pool("worker/job_runner.php", 1, 2, 2);
         usleep(100000);
     }
 
@@ -20,14 +20,14 @@ class ResilienceTest extends TestCase
         $this->expectException(WorkerException::class);
         $this->expectExceptionMessage('impossibleMethod'); // Check for PHP error message part
 
-        $f = \Go\async('FatalJob', []);
+        $f = \Pogo\async('FatalJob', []);
         $f->await(2.0);
     }
 
     public function testTraceMarshalling(): void
     {
         try {
-            $f = \Go\async('ThrowingJob', []);
+            $f = \Pogo\async('ThrowingJob', []);
             $f->await(2.0);
             $this->fail("Should have thrown WorkerException");
         } catch (WorkerException $e) {
@@ -44,7 +44,7 @@ class ResilienceTest extends TestCase
         // We expect PIDs to change.
         $pids = [];
         for ($i = 0; $i < 5; $i++) {
-            $res = \Go\async('EchoJob', ['message' => "Rot $i"])->await();
+            $res = \Pogo\async('EchoJob', ['message' => "Rot $i"])->await();
             $pids[] = $res['pid'];
         }
 
@@ -55,7 +55,7 @@ class ResilienceTest extends TestCase
     public function testTimeoutHandling(): void
     {
         $this->expectException(TimeoutException::class);
-        $f = \Go\async('AsyncJob', ['sleep' => 500, 'data' => 'foo']);
+        $f = \Pogo\async('AsyncJob', ['sleep' => 500, 'data' => 'foo']);
         $f->await(0.1);
     }
 }

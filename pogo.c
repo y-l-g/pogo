@@ -677,7 +677,7 @@ PHP_MINIT_FUNCTION(pogo)
     go_waitgroup_ce->create_object = pogo_create_object;
 
     zend_class_entry ce_pool;
-    INIT_CLASS_ENTRY(ce_pool, "Go\\Runtime\\Pool", class_Go_Runtime_Pool_methods);
+    INIT_CLASS_ENTRY(ce_pool, "Pogo\\Runtime\\Pool", class_Go_Runtime_Pool_methods);
     go_pool_ce = zend_register_internal_class(&ce_pool);
     go_pool_ce->create_object = pogo_create_object;
     zend_declare_property_string(go_pool_ce, "entrypoint", sizeof("entrypoint")-1, "", ZEND_ACC_PRIVATE);
@@ -687,9 +687,9 @@ PHP_MINIT_FUNCTION(pogo)
     zend_declare_property_null(go_pool_ce, "options", sizeof("options")-1, ZEND_ACC_PRIVATE);
 
     zend_class_entry ce;
-    INIT_CLASS_ENTRY(ce, "Go\\WorkerException", NULL);
+    INIT_CLASS_ENTRY(ce, "Pogo\\WorkerException", NULL);
     go_worker_exception_ce = zend_register_internal_class_ex(&ce, zend_ce_exception);
-    INIT_CLASS_ENTRY(ce, "Go\\TimeoutException", NULL);
+    INIT_CLASS_ENTRY(ce, "Pogo\\TimeoutException", NULL);
     go_timeout_exception_ce = zend_register_internal_class_ex(&ce, zend_ce_exception);
 
     _gopogo_init((uintptr_t)proxy_log);

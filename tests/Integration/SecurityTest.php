@@ -3,20 +3,20 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\WorkerException;
-use Go\Runtime\Pool;
+use Pogo\WorkerException;
+use Pogo\Runtime\Pool;
 
 class SecurityTest extends TestCase
 {
     public function testMaxPayloadDoSProtection(): void
     {
-        \Go\start_worker_pool("worker/job_runner.php", 1, 1);
+        \Pogo\start_worker_pool("worker/job_runner.php", 1, 1);
 
         $this->expectException(WorkerException::class);
         $this->expectExceptionMessage("Response too large");
 
         // Job returns 20MB, limit is 16MB
-        \Go\async('LargePayloadJob', [])->await(5.0);
+        \Pogo\async('LargePayloadJob', [])->await(5.0);
     }
 
     public function testPoolIsolation(): void

@@ -3,7 +3,7 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Go\Channel;
+use Pogo\Channel;
 
 class PrimitivesTest extends TestCase
 {
@@ -25,7 +25,7 @@ class PrimitivesTest extends TestCase
         $ch->init(1);
 
         $start = microtime(true);
-        $result = \Go\select([$ch], 0.2);
+        $result = \Pogo\select([$ch], 0.2);
         $duration = microtime(true) - $start;
 
         $this->assertNull($result);
@@ -38,7 +38,7 @@ class PrimitivesTest extends TestCase
         $ch->init(1);
         $ch->push("Payload");
 
-        $result = \Go\select(['api_response' => $ch], 1.0);
+        $result = \Pogo\select(['api_response' => $ch], 1.0);
 
         $this->assertIsArray($result);
         $this->assertEquals('api_response', $result['key']);

@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../../lib/Contract/JobInterface.php';
 
-class NestedJob implements \Go\Contract\JobInterface
+class NestedJob implements \Pogo\Contract\JobInterface
 {
     public function handle($payload)
     {

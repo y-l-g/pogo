@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Go\Runtime;
+namespace Pogo\Runtime;
 
 interface ProtocolConstants
 {

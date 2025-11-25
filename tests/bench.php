@@ -4,7 +4,7 @@ require_once __DIR__ . '/../lib/Contract/JobInterface.php';
 require_once __DIR__ . '/Jobs/EchoJob.php';
 require_once __DIR__ . '/Jobs/ShmLargeJob.php';
 
-if (!function_exists('Go\\start_worker_pool')) {
+if (!function_exists('Pogo\\start_worker_pool')) {
     echo "FATAL: Extension not loaded.\n";
     exit(1);
 }
@@ -12,20 +12,20 @@ if (!function_exists('Go\\start_worker_pool')) {
 echo "--- Pogo Benchmark ---\n";
 
 // 1. Start Pool (4 Workers)
-Go\start_worker_pool("worker/job_runner.php", 4, 8, 1000);
+Pogo\start_worker_pool("worker/job_runner.php", 4, 8, 1000);
 echo "Pool started (4 Workers).\n\n";
 
 // --- Benchmark 1: High Frequency Small Payloads (IPC Overhead) ---
-// This tests the optimization of the Pipe transport and Go\select (Zero-JSON)
+// This tests the optimization of the Pipe transport and Pogo\select (Zero-JSON)
 echo "1. Benchmarking IPC Latency (5000 reqs, 4 pogo)...\n";
 $start = microtime(true);
 $count = 5000;
-$wg = new Go\WaitGroup();
+$wg = new Pogo\WaitGroup();
 $wg->add($count);
 
 // We use a raw dispatch for maximum speed testing
 for ($i = 0; $i < $count; $i++) {
-    Go\dispatch('php.dispatch_pooled', [
+    Pogo\dispatch('php.dispatch_pooled', [
         'job_class' => 'EchoJob',
         'payload' => ['message' => 'ping'],
         'wait_group' => $wg,
@@ -46,7 +46,7 @@ $start = microtime(true);
 
 $futures = [];
 for ($i = 0; $i < $count; $i++) {
-    $futures[] = Go\async(ShmLargeJob::class, ['blob' => $data]);
+    $futures[] = Pogo\async(ShmLargeJob::class, ['blob' => $data]);
 }
 
 foreach ($futures as $f) {

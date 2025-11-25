@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../../lib/Contract/JobInterface.php';
 
-class ReliabilityJob implements \Go\Contract\JobInterface
+class ReliabilityJob implements \Pogo\Contract\JobInterface
 {
     public function handle($payload)
     {

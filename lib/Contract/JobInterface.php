@@ -1,6 +1,6 @@
 <?php
 
-namespace Go\Contract;
+namespace Pogo\Contract;
 
 /**
  * Defines the contract for all executable PHP jobs.

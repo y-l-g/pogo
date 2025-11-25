@@ -76,7 +76,7 @@ Create three files in a `public/` directory:
 ```php
 <?php
 
-use Go\Contract\JobInterface;
+use Pogo\Contract\JobInterface;
 
 class HelloWorldJob implements JobInterface
 {
@@ -100,7 +100,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 require_once __DIR__ . '/HelloWorldJob.php';
 
-use Go\Runtime\Protocol;
+use Pogo\Runtime\Protocol;
 
 (new Protocol())->run();
 ```
@@ -114,10 +114,10 @@ require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/HelloWorldJob.php';
 
 // Start the Supervisor
-Go\start_worker_pool(__DIR__ . '/worker.php', 1, 1);
+Pogo\start_worker_pool(__DIR__ . '/worker.php', 1, 1);
 
 // Dispatch
-$future = Go\async('HelloWorldJob', ['name' => 'Docker User']);
+$future = Pogo\async('HelloWorldJob', ['name' => 'Docker User']);
 
 // Result
 header('Content-Type: application/json');
@@ -160,9 +160,9 @@ Sending an email in the background without blocking the HTTP response.
 
 ```php
 // index.php
-Go\start_worker_pool(__DIR__ . '/worker.php');
+Pogo\start_worker_pool(__DIR__ . '/worker.php');
 
-Go\async(EmailJob::class, [
+Pogo\async(EmailJob::class, [
     'to' => 'user@example.com',
     'body' => 'Welcome!'
 ]);
@@ -175,7 +175,7 @@ echo "Email queued!";
 require 'vendor/autoload.php';
 // ... Bootstrap code ...
 
-class EmailJob implements Go\Contract\JobInterface {
+class EmailJob implements Pogo\Contract\JobInterface {
     public function handle($payload) {
         Mailer::send($payload['to'], $payload['body']);
         return "Sent";
@@ -183,7 +183,7 @@ class EmailJob implements Go\Contract\JobInterface {
 }
 
 // Start loop
-(new Go\Runtime\Protocol())->run();
+(new Pogo\Runtime\Protocol())->run();
 ```
 
 ### Scenario 2: Parallel Processing with Result Aggregation
@@ -191,9 +191,9 @@ class EmailJob implements Go\Contract\JobInterface {
 Running 3 heavy calculations in parallel and waiting for all results.
 
 ```php
-$f1 = Go\async(HeavyMath::class, ['val' => 10]);
-$f2 = Go\async(HeavyMath::class, ['val' => 20]);
-$f3 = Go\async(HeavyMath::class, ['val' => 30]);
+$f1 = Pogo\async(HeavyMath::class, ['val' => 10]);
+$f2 = Pogo\async(HeavyMath::class, ['val' => 20]);
+$f3 = Pogo\async(HeavyMath::class, ['val' => 30]);
 
 // Wait for all (Parallel execution)
 $results = [
@@ -208,14 +208,14 @@ $results = [
 Wait for the first result from multiple sources, or timeout.
 
 ```php
-$ch1 = new Go\Channel();
-$ch2 = new Go\Channel();
+$ch1 = new Pogo\Channel();
+$ch2 = new Pogo\Channel();
 
 // Pass channels to workers (Magic Marshalling handles the pointer logic)
-Go\async(ProducerA::class, ['out' => $ch1]);
-Go\async(ProducerB::class, ['out' => $ch2]);
+Pogo\async(ProducerA::class, ['out' => $ch1]);
+Pogo\async(ProducerB::class, ['out' => $ch2]);
 
-$result = Go\select([
+$result = Pogo\select([
     'a' => $ch1,
     'b' => $ch2
 ], 0.5); // 500ms timeout
@@ -233,7 +233,7 @@ if ($result) {
 
 ### Global Functions
 
-#### `Go\start_worker_pool`
+#### `Pogo\start_worker_pool`
 
 ```php
 function start_worker_pool(
@@ -268,13 +268,13 @@ Initializes the background worker pool with configuration options. This function
 
 - `void`
 
-#### `Go\async`
+#### `Pogo\async`
 
 ```php
-function async(string $class, array $args = []): Go\Future
+function async(string $class, array $args = []): Pogo\Future
 ```
 
-Dispatches a job to the pool. This is a convenience wrapper around `Go\Runtime\Pool::submit`.
+Dispatches a job to the pool. This is a convenience wrapper around `Pogo\Runtime\Pool::submit`.
 
 **Parameters**
 
@@ -285,9 +285,9 @@ Dispatches a job to the pool. This is a convenience wrapper around `Go\Runtime\P
 
 **Returns**
 
-- `Go\Future` — A future object representing the pending result.
+- `Pogo\Future` — A future object representing the pending result.
 
-#### `Go\select`
+#### `Pogo\select`
 
 ```php
 function select(array $cases, ?float $timeout = null): ?array
@@ -306,7 +306,7 @@ Performs a non-blocking select over multiple Channels/Futures (equivalent to Go'
 
 - `array\|null` — Returns `['key' => $k, 'value' => $v]` of the first ready channel, or `null` on timeout.
 
-#### `Go\get_pool_stats`
+#### `Pogo\get_pool_stats`
 
 ```php
 function get_pool_stats(int $poolId = 0): array
@@ -326,7 +326,7 @@ Returns real-time observability metrics from the Go Supervisor.
 
 ### Internal Functions (Advanced)
 
-#### `Go\_shm_check`
+#### `Pogo\_shm_check`
 
 ```php
 function _shm_check(int $fd): bool
@@ -334,15 +334,15 @@ function _shm_check(int $fd): bool
 
 Checks if the Shared Memory region at the given File Descriptor is correctly mapped and available.
 
-#### `Go\_shm_read`
+#### `Pogo\_shm_read`
 
 ```php
 function _shm_read(int $fd, int $offset, int $length): string
 ```
 
-Reads raw data from the shared memory region. Note: The userland protocol usually handles this automatically via `Go\_shm_decode`.
+Reads raw data from the shared memory region. Note: The userland protocol usually handles this automatically via `Pogo\_shm_decode`.
 
-#### `Go\_shm_decode`
+#### `Pogo\_shm_decode`
 
 ```php
 function _shm_decode(int $fd, int $offset, int $length): mixed
@@ -352,20 +352,20 @@ Decodes JSON data directly from the Shared Memory pointer into a PHP variable (Z
 
 ### Classes
 
-#### `Go\Future`
+#### `Pogo\Future`
 
 Represents the result of an asynchronous computation.
 
 **Methods**
 
 - **`await(?float $timeout = null): mixed`**
-  Blocks until result is available. Throws `Go\TimeoutException` or `Go\WorkerException`.
+  Blocks until result is available. Throws `Pogo\TimeoutException` or `Pogo\WorkerException`.
 - **`done(): bool`**
   Returns `true` if the job is finished (non-blocking).
 - **`cancel(): bool`**
   Attempts to cancel the pending job via the Supervisor.
 
-#### `Go\Channel`
+#### `Pogo\Channel`
 
 A Go-native Thread-Safe Channel.
 
@@ -408,8 +408,8 @@ This layer acts as the state manager bridging CGO.
 The PHP Extension source code.
 
 - **Constants Source of Truth:** Uses generated headers (`pogo_consts.h`) derived from Go definitions to ensure the C layer and Go layer never drift on protocol magic numbers.
-- **O(1) Select Optimization:** The `Go\select` implementation constructs a flat array of handles in C before passing them to Go. This avoids iterating the PHP HashTable inside the Go runtime.
-- **Zero-Copy Decode:** For Shared Memory payloads, the C extension maps the memory region and decodes JSON directly from the raw pointer (`Go\_shm_decode`), eliminating the need to allocate a PHP string and `memcpy` the data.
+- **O(1) Select Optimization:** The `Pogo\select` implementation constructs a flat array of handles in C before passing them to Go. This avoids iterating the PHP HashTable inside the Go runtime.
+- **Zero-Copy Decode:** For Shared Memory payloads, the C extension maps the memory region and decodes JSON directly from the raw pointer (`Pogo\_shm_decode`), eliminating the need to allocate a PHP string and `memcpy` the data.
 
 ### Layer D: The Protocol & Transport (`Protocol.php`)
 
@@ -466,6 +466,6 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 
 ### Known Limitations
 
-1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Go\Channel` / `Go\WaitGroup` objects can be passed.
+1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Pogo\Channel` / `Pogo\WaitGroup` objects can be passed.
 2. **Windows Process Management:** While the SHM layer is now cross-platform, full process lifecycle management (signals) on Windows behaves differently than POSIX systems. Primary support targets Linux/MacOS.
 3. **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent. Increasing `shm_size` mitigates this.
