@@ -1,12 +1,15 @@
 {
-  "name": "y-l-g/go-php",
+  "name": "y-l-g/pogo",
   "description": "High-performance pogo library for PHP (FrankenPHP Extension)",
   "type": "library",
   "license": "MIT",
   "autoload": {
     "psr-4": {
       "Go\\": "lib/"
-    }
+    },
+    "files": [
+      "stubs/Pogo.php"
+    ]
   },
   "autoload-dev": {
     "psr-4": {

@@ -1,0 +1,13 @@
+/pogo.c export-ignore
+/pogo.go export-ignore
+/pool.go export-ignore
+/pogo.h export-ignore
+/pogo.stub.php export-ignore
+/pogo_arginfo.h export-ignore
+/_cgo_export.h export-ignore
+/Dockerfile export-ignore
+/tests export-ignore
+/.github export-ignore
+/examples export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
