@@ -3,13 +3,18 @@ module github.com/y-l-g/pogo
 go 1.25.0
 
 require (
+	github.com/dunglas/frankenphp v1.10.0
+	github.com/ugorji/go/codec v1.3.1
+	golang.org/x/sys v0.38.0
+)
+
+require (
 	github.com/MauriceGit/skiplist v0.0.0-20211105230623-77f5c8d3e145 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.14.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
-	github.com/dunglas/frankenphp v1.10.0 // indirect
 	github.com/dunglas/mercure v0.21.2 // indirect
 	github.com/dunglas/skipfilter v1.0.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -36,7 +41,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
-	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/unrolled/secure v1.17.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
@@ -44,7 +48,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )

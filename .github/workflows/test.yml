@@ -56,7 +56,7 @@ jobs:
           echo "CGO_LDFLAGS=$(php-config --ldflags) $(php-config --libs)" >> $GITHUB_ENV
 
       - name: Run Go Tests
-        run: go test -v . -tags=nobadger,nomysql,nopgx,nowatcher -mod=readonly
+        run: go test -v -race ./pkg/...
 
       - name: Build FrankenPHP with Extension
         run: |
