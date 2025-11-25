@@ -4,4 +4,4 @@ composer.lock
 .phpunit.result.cache
 .php-cs-fixer.cache
 public
-tmp
+tmp.md
