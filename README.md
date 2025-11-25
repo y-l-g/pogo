@@ -1,7 +1,3 @@
-Here is the updated `README.md`. I have replaced the **Runtime Configuration** section with the **Quick Start** tutorial as requested, while keeping the rest of the file exactly as it was.
-
---- START OF FILE README.md ---
-
 # FrankenPHP Pogo (PHP Over Go)
 
 The **FrankenPHP Pogo Extension** is a high-performance, systems-level library designed to introduce **True Parallelism** and **Go-native Pogo Primitives** into the PHP ecosystem.
@@ -73,36 +69,13 @@ Install the library via Composer:
 composer require pogo/pogo
 ```
 
-Create two files in a `public/` directory:
+Create three files in a `public/` directory:
 
-`public/index.php` (The HTTP Entrypoint):
-
-```php
-<?php
-
-require_once __DIR__ . '/../vendor/autoload.php';
-
-$workerPath = __DIR__ . '/worker.php';
-
-// Start the Supervisor
-Go\start_worker_pool($workerPath, 1, 1);
-
-// Dispatch a job
-$future = Go\async('HelloWorldJob', ['name' => 'Docker Volume']);
-
-// Await result
-header('Content-Type: application/json');
-echo json_encode($future->await(2.0), JSON_PRETTY_PRINT);
-```
-
-`public/worker.php` (The Background Worker):
+`public/HelloWorldJob.php` (The Business Logic):
 
 ```php
 <?php
 
-require __DIR__ . '/../vendor/autoload.php';
-
-use Go\Runtime\Protocol;
 use Go\Contract\JobInterface;
 
 class HelloWorldJob implements JobInterface
@@ -116,9 +89,39 @@ class HelloWorldJob implements JobInterface
         ];
     }
 }
+```
 
-// Enter the Worker Loop
+`public/worker.php` (The Background Worker Infrastructure):
+
+```php
+<?php
+
+require __DIR__ . '/../vendor/autoload.php';
+
+require_once __DIR__ . '/HelloWorldJob.php';
+
+use Go\Runtime\Protocol;
+
 (new Protocol())->run();
+```
+
+`public/index.php` (The HTTP Entrypoint):
+
+```php
+<?php
+
+require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/HelloWorldJob.php';
+
+// Start the Supervisor
+Go\start_worker_pool(__DIR__ . '/worker.php', 1, 1);
+
+// Dispatch
+$future = Go\async('HelloWorldJob', ['name' => 'Docker User']);
+
+// Result
+header('Content-Type: application/json');
+echo json_encode($future->await(2.0), JSON_PRETTY_PRINT);
 ```
 
 **2. Run it**
