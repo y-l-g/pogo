@@ -109,8 +109,8 @@ func init() {
 	poolRegistry.Store(int64(0), defaultPool)
 }
 
-//export Go_shutdown_module
-func Go_shutdown_module() {
+//export Pogo_shutdown_module
+func Pogo_shutdown_module() {
 	log.Println("Shutting down pogo module...")
 	poolRegistry.Range(func(key, value any) bool {
 		p := value.(*supervisor.Pool)

@@ -142,11 +142,11 @@ static int internal_process_result(zval *future_obj, char *raw_res) {
     return SUCCESS;
 }
 
-PHP_FUNCTION(Go__gopogo_init) {
+PHP_FUNCTION(Pogo__gopogo_init) {
     _gopogo_init((uintptr_t)proxy_log);
 }
 
-PHP_FUNCTION(Go__shm_check) {
+PHP_FUNCTION(Pogo__shm_check) {
     zend_long fd;
     ZEND_PARSE_PARAMETERS_START(1, 1)
         Z_PARAM_LONG(fd)
@@ -154,7 +154,7 @@ PHP_FUNCTION(Go__shm_check) {
     RETURN_BOOL(zend_hash_index_find(&shm_registry, (zend_ulong)fd) != NULL);
 }
 
-PHP_FUNCTION(Go__shm_read) {
+PHP_FUNCTION(Pogo__shm_read) {
     zend_long fd, offset, length;
     ZEND_PARSE_PARAMETERS_START(3, 3)
         Z_PARAM_LONG(fd)
@@ -182,7 +182,7 @@ PHP_FUNCTION(Go__shm_read) {
     RETURN_STRINGL(region->base + offset + 1, length);
 }
 
-PHP_FUNCTION(Go__shm_decode) {
+PHP_FUNCTION(Pogo__shm_decode) {
     zend_long fd, offset, length;
     ZEND_PARSE_PARAMETERS_START(3, 3)
         Z_PARAM_LONG(fd)
@@ -207,7 +207,7 @@ PHP_FUNCTION(Go__shm_decode) {
     php_json_decode(return_value, region->base + offset + 1, (int)length, 1, PHP_JSON_PARSER_DEFAULT_DEPTH);
 }
 
-PHP_FUNCTION(Go_start_worker_pool)
+PHP_FUNCTION(Pogo_start_worker_pool)
 {
     char *entrypoint = "job_runner.php";
     size_t entry_len = sizeof("job_runner.php") - 1;
@@ -250,7 +250,7 @@ PHP_FUNCTION(Go_start_worker_pool)
     start_workers_wrapper(entrypoint, (int)entry_len, min_workers, max_workers, max_jobs, shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
-PHP_FUNCTION(Go_dispatch)
+PHP_FUNCTION(Pogo_dispatch)
 {
     char *name;
     size_t name_len;
@@ -264,7 +264,7 @@ PHP_FUNCTION(Go_dispatch)
     dispatch_wrapper(name, (int)name_len, payload);
 }
 
-PHP_FUNCTION(Go_dispatch_task)
+PHP_FUNCTION(Pogo_dispatch_task)
 {
     char *task_name;
     size_t task_name_len;
@@ -299,7 +299,7 @@ PHP_FUNCTION(Go_dispatch_task)
     zval_ptr_dtor(&channel_obj);
 }
 
-PHP_FUNCTION(Go_async)
+PHP_FUNCTION(Pogo_async)
 {
     char *class_name;
     size_t class_name_len;
@@ -340,7 +340,7 @@ typedef struct {
     int key_type; // HASH_KEY_IS_STRING or HASH_KEY_IS_LONG
 } select_key_t;
 
-PHP_FUNCTION(Go_select)
+PHP_FUNCTION(Pogo_select)
 {
     zval *cases;
     double timeout = -1.0;
@@ -429,7 +429,7 @@ PHP_FUNCTION(Go_select)
     }
 }
 
-PHP_FUNCTION(Go_get_pool_stats)
+PHP_FUNCTION(Pogo_get_pool_stats)
 {
     zend_long poolID = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -446,7 +446,7 @@ PHP_FUNCTION(Go_get_pool_stats)
     free(json_res);
 }
 
-PHP_METHOD(Go_Runtime_Pool, __construct) {
+PHP_METHOD(Pogo_Runtime_Pool, __construct) {
     char *entrypoint;
     size_t entry_len;
     zend_long min = 1;
@@ -482,7 +482,7 @@ PHP_METHOD(Go_Runtime_Pool, __construct) {
     }
 }
 
-PHP_METHOD(Go_Runtime_Pool, start) {
+PHP_METHOD(Pogo_Runtime_Pool, start) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     long poolID = (long)intern->go_handle;
 
@@ -517,13 +517,13 @@ PHP_METHOD(Go_Runtime_Pool, start) {
     start_pool_wrapper(poolID, Z_STRVAL_P(entrypoint), (int)Z_STRLEN_P(entrypoint), Z_LVAL_P(min), Z_LVAL_P(max), Z_LVAL_P(max_jobs), shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
-PHP_METHOD(Go_Runtime_Pool, shutdown) {
+PHP_METHOD(Pogo_Runtime_Pool, shutdown) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     long poolID = (long)intern->go_handle;
     shutdown_pool_wrapper(poolID);
 }
 
-PHP_METHOD(Go_Runtime_Pool, submit) {
+PHP_METHOD(Pogo_Runtime_Pool, submit) {
     char *class_name;
     size_t class_name_len;
     zval *args = NULL;
@@ -557,48 +557,48 @@ PHP_METHOD(Go_Runtime_Pool, submit) {
     zval_ptr_dtor(&channel_obj);
 }
 
-PHP_METHOD(Go_WaitGroup, __construct) {
+PHP_METHOD(Pogo_WaitGroup, __construct) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     intern->go_handle = create_WaitGroup_object();
     intern->owns_handle = true;
 }
-PHP_METHOD(Go_WaitGroup, add) {
+PHP_METHOD(Pogo_WaitGroup, add) {
     zend_long delta = 1;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_LONG(delta) ZEND_PARSE_PARAMETERS_END();
     add_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, delta);
 }
-PHP_METHOD(Go_WaitGroup, done) {
+PHP_METHOD(Pogo_WaitGroup, done) {
     done_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
-PHP_METHOD(Go_WaitGroup, wait) {
+PHP_METHOD(Pogo_WaitGroup, wait) {
     wait_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
 
-PHP_METHOD(Go_Channel, __construct) {
+PHP_METHOD(Pogo_Channel, __construct) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     intern->go_handle = create_Channel_object();
     intern->owns_handle = true;
 }
-PHP_METHOD(Go_Channel, init) {
+PHP_METHOD(Pogo_Channel, init) {
     zend_long capacity = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_LONG(capacity) ZEND_PARSE_PARAMETERS_END();
     init_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, capacity);
 }
-PHP_METHOD(Go_Channel, push) {
+PHP_METHOD(Pogo_Channel, push) {
     char *val; size_t val_len;
     ZEND_PARSE_PARAMETERS_START(1, 1) Z_PARAM_STRING(val, val_len) ZEND_PARSE_PARAMETERS_END();
     push_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, val, (int)val_len);
 }
-PHP_METHOD(Go_Channel, pop) {
+PHP_METHOD(Pogo_Channel, pop) {
     char *res = pop_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
     if (res) { RETVAL_STRING(res); free(res); } else { RETURN_EMPTY_STRING(); }
 }
-PHP_METHOD(Go_Channel, close) {
+PHP_METHOD(Pogo_Channel, close) {
     close_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
 
-PHP_METHOD(Go_Future, __construct) {}
-PHP_METHOD(Go_Future, await) {
+PHP_METHOD(Pogo_Future, __construct) {}
+PHP_METHOD(Pogo_Future, await) {
     double timeout = -1.0;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_DOUBLE(timeout) ZEND_PARSE_PARAMETERS_END();
 
@@ -631,7 +631,7 @@ PHP_METHOD(Go_Future, await) {
     zval *res_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "result", sizeof("result")-1, 1, NULL);
     RETURN_ZVAL(res_prop, 1, 0);
 }
-PHP_METHOD(Go_Future, done) {
+PHP_METHOD(Pogo_Future, done) {
     zval *resolved = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "resolved", sizeof("resolved")-1, 1, NULL);
     if (resolved && Z_TYPE_P(resolved) == IS_TRUE) RETURN_TRUE;
 
@@ -644,7 +644,7 @@ PHP_METHOD(Go_Future, done) {
     if (internal_process_result(ZEND_THIS, res) == FAILURE) RETURN_THROWS();
     RETURN_TRUE;
 }
-PHP_METHOD(Go_Future, cancel) {
+PHP_METHOD(Pogo_Future, cancel) {
     zval *ch_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "channel", sizeof("channel")-1, 1, NULL);
     if (!ch_prop || Z_TYPE_P(ch_prop) != IS_OBJECT) RETURN_FALSE;
 
@@ -657,7 +657,7 @@ PHP_METHOD(Go_Future, cancel) {
 PHP_MSHUTDOWN_FUNCTION(pogo)
 {
     zend_hash_destroy(&shm_registry);
-    Go_shutdown_module();
+    Pogo_shutdown_module();
     return SUCCESS;
 }
 
@@ -667,17 +667,17 @@ PHP_MINIT_FUNCTION(pogo)
     pogo_handlers.free_obj = pogo_free_object;
     pogo_handlers.offset = offsetof(pogo_object, std);
 
-    go_future_ce = register_class_Go_Future();
+    go_future_ce = register_class_Pogo_Future();
     go_future_ce->create_object = pogo_create_object;
 
-    go_channel_ce = register_class_Go_Channel();
+    go_channel_ce = register_class_Pogo_Channel();
     go_channel_ce->create_object = pogo_create_object;
 
-    go_waitgroup_ce = register_class_Go_WaitGroup();
+    go_waitgroup_ce = register_class_Pogo_WaitGroup();
     go_waitgroup_ce->create_object = pogo_create_object;
 
     zend_class_entry ce_pool;
-    INIT_CLASS_ENTRY(ce_pool, "Pogo\\Runtime\\Pool", class_Go_Runtime_Pool_methods);
+    INIT_CLASS_ENTRY(ce_pool, "Pogo\\Runtime\\Pool", class_Pogo_Runtime_Pool_methods);
     go_pool_ce = zend_register_internal_class(&ce_pool);
     go_pool_ce->create_object = pogo_create_object;
     zend_declare_property_string(go_pool_ce, "entrypoint", sizeof("entrypoint")-1, "", ZEND_ACC_PRIVATE);
