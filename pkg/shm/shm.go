@@ -145,7 +145,7 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 		s.queue = append(s.queue, padMeta)
 		s.tail += pad
 
-		physHead = 0
+		// Fix: Removed ineffectual assignment to physHead
 	}
 
 	// 4. Final Check
