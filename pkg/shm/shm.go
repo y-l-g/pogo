@@ -151,8 +151,6 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 		s.queue = append(s.queue, padMeta)
 		s.tail += pad
 		s.wasted += pad
-
-		physHead = 0
 	}
 
 	// 4. Final Check

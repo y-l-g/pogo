@@ -374,10 +374,7 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 		if h != 0 {
 			obj := getGoObject(h)
 			if ch, ok := obj.(*supervisor.Channel); ok {
-				// Case 1: Non-blocking poll (timeout == 0 or -1?? PHP args say timeout=null is -1.0)
-				// PHP: select($cases, $timeout). Default timeout is null (-1.0).
-				// If timeout == 0.0, it's non-blocking.
-
+				// Case 1: Non-blocking poll (timeout == 0.0)
 				if timeoutSeconds == 0 {
 					select {
 					case val, ok := <-ch.Ch:
@@ -400,13 +397,11 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 					}
 				} else {
 					// Blocking (timeout < 0)
-					select {
-					case val, ok := <-ch.Ch:
-						if !ok {
-							return C.select_result{index: 0, value: C.CString(""), status: 0}
-						}
-						return C.select_result{index: 0, value: C.CString(val), status: 0}
+					val, ok := <-ch.Ch
+					if !ok {
+						return C.select_result{index: 0, value: C.CString(""), status: 0}
 					}
+					return C.select_result{index: 0, value: C.CString(val), status: 0}
 				}
 			}
 		}

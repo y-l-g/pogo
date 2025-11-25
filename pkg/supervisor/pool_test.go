@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+func setEnvOrFatal(t *testing.T, key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("Failed to set env var %s: %v", key, err)
+	}
+}
+
+func unsetEnvOrFatal(t *testing.T, key string) {
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("Failed to unset env var %s: %v", key, err)
+	}
+}
+
 func TestCrashResilience(t *testing.T) {
 	// Locate the test binary itself to use as the worker
 	exe, err := os.Executable()
@@ -14,15 +26,15 @@ func TestCrashResilience(t *testing.T) {
 	}
 
 	// Set env vars for the pool to pick up
-	os.Setenv("POGO_TEST_PHP_BINARY", exe)
+	setEnvOrFatal(t, "POGO_TEST_PHP_BINARY", exe)
 	// Set env vars for the worker process to behave correctly
-	os.Setenv("GO_WANT_HELPER_PROCESS", "1")
-	os.Setenv("POGO_MOCK_WORKER_MODE", "crash_immediate")
+	setEnvOrFatal(t, "GO_WANT_HELPER_PROCESS", "1")
+	setEnvOrFatal(t, "POGO_MOCK_WORKER_MODE", "crash_immediate")
 
 	defer func() {
-		os.Unsetenv("POGO_TEST_PHP_BINARY")
-		os.Unsetenv("GO_WANT_HELPER_PROCESS")
-		os.Unsetenv("POGO_MOCK_WORKER_MODE")
+		unsetEnvOrFatal(t, "POGO_TEST_PHP_BINARY")
+		unsetEnvOrFatal(t, "GO_WANT_HELPER_PROCESS")
+		unsetEnvOrFatal(t, "POGO_MOCK_WORKER_MODE")
 	}()
 
 	// 2. Initialize Pool
@@ -63,14 +75,14 @@ func TestNormalOperation(t *testing.T) {
 		t.Fatalf("Failed to get executable: %v", err)
 	}
 
-	os.Setenv("POGO_TEST_PHP_BINARY", exe)
-	os.Setenv("GO_WANT_HELPER_PROCESS", "1")
-	os.Setenv("POGO_MOCK_WORKER_MODE", "normal") // Normal echo mode
+	setEnvOrFatal(t, "POGO_TEST_PHP_BINARY", exe)
+	setEnvOrFatal(t, "GO_WANT_HELPER_PROCESS", "1")
+	setEnvOrFatal(t, "POGO_MOCK_WORKER_MODE", "normal") // Normal echo mode
 
 	defer func() {
-		os.Unsetenv("POGO_TEST_PHP_BINARY")
-		os.Unsetenv("GO_WANT_HELPER_PROCESS")
-		os.Unsetenv("POGO_MOCK_WORKER_MODE")
+		unsetEnvOrFatal(t, "POGO_TEST_PHP_BINARY")
+		unsetEnvOrFatal(t, "GO_WANT_HELPER_PROCESS")
+		unsetEnvOrFatal(t, "POGO_MOCK_WORKER_MODE")
 	}()
 
 	p := NewPool(1000)

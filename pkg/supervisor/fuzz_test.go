@@ -38,15 +38,17 @@ func FuzzPacketReading(f *testing.F) {
 
 		// Setup Pipes
 		r, w, _ := os.Pipe()
-		defer r.Close()
-		defer w.Close()
+		defer func() { _ = r.Close() }()
+		defer func() { _ = w.Close() }()
 
 		// Write fuzz data to pipe asynchronously to prevent blocking
 		go func() {
-			w.Write(data)
+			if _, err := w.Write(data); err != nil {
+				return
+			}
 			// Don't close immediately, let the reader try to read
 			time.Sleep(10 * time.Millisecond)
-			w.Close()
+			_ = w.Close()
 		}()
 
 		// Setup minimal Worker
@@ -76,10 +78,14 @@ func FuzzPacketReading(f *testing.F) {
 		worker.ipcWriter = w_local
 
 		go func() {
-			w_remote.Write(data)
-			w_remote.Close()
-			io.Copy(io.Discard, r_remote)
-			r_remote.Close()
+			if _, err := w_remote.Write(data); err != nil {
+				_ = w_remote.Close()
+				_ = r_remote.Close()
+				return
+			}
+			_ = w_remote.Close()
+			_, _ = io.Copy(io.Discard, r_remote)
+			_ = r_remote.Close()
 		}()
 
 		payload := map[string]any{"fuzz": true}
@@ -92,7 +98,7 @@ func FuzzPacketReading(f *testing.F) {
 
 		p.executeOnWorker(worker, payload, nil)
 
-		w_local.Close()
-		r_local.Close()
+		_ = w_local.Close()
+		_ = r_local.Close()
 	})
 }
