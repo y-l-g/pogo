@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"runtime/cgo"
 	"strings"
@@ -86,6 +87,12 @@ func _gopogo_init(fn C.uintptr_t) {
 	atomic.StoreUintptr(&logBridgeFn, uintptr(fn))
 
 	logOnce.Do(func() {
+		// Only start metrics in the Supervisor process.
+		// Workers have FRANKENPHP_WORKER_PIPE_IN set.
+		if os.Getenv("FRANKENPHP_WORKER_PIPE_IN") == "" {
+			supervisor.InitMetrics(":9090")
+		}
+
 		go func() {
 			for msgStr := range logChan {
 				cMsg := C.CString(msgStr)
@@ -100,7 +107,7 @@ func _gopogo_init(fn C.uintptr_t) {
 
 	log.SetOutput(&BridgeLogger{})
 	log.SetFlags(0)
-	log.Println("Go Pogo Extension Initialized (Log Bridge Active)")
+	log.Println("Go Pogo Extension Initialized (Log Bridge & Metrics Active)")
 }
 
 func init() {

@@ -28,14 +28,14 @@ class UserLandHttpJob implements \Pogo\Contract\JobInterface
         $result = file_get_contents($url, false, $context);
 
         // Parse headers to get status code (simplified)
-        $statusLine = $http_response_header[0] ?? 'HTTP/1.1 000 Error';
+        $statusLine = http_get_last_response_headers()[0] ?? 'HTTP/1.1 000 Error';
         preg_match('#HTTP/\d\.\d (\d+)#', $statusLine, $matches);
         $statusCode = (int) ($matches[1] ?? 0);
 
         return [
             'status_code' => $statusCode,
             'body' => $result,
-            'headers' => $http_response_header,
+            'headers' => http_get_last_response_headers(),
         ];
     }
 }

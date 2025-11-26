@@ -1,14 +1,14 @@
-FROM dunglas/frankenphp:builder AS builder
+FROM dunglas/frankenphp:1.10-builder-php8.5.0-bookworm AS builder
 
 COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
 
 COPY . /pogo
 
-RUN CGO_ENABLED=1 \
-    XCADDY_SETCAP=1 \
-    XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx" \
-    CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
+RUN CGO_CFLAGS="-D_GNU_SOURCE -g -O0 $(php-config --includes)" \
     CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
+    XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx,nowatcher -race" \
+    CGO_ENABLED=1 \
+    XCADDY_SETCAP=1 \
     xcaddy build \
     --output /usr/local/bin/frankenphp \
     --with github.com/dunglas/frankenphp=./ \
@@ -18,11 +18,13 @@ RUN CGO_ENABLED=1 \
     --with github.com/dunglas/vulcain/caddy \
     --with github.com/y-l-g/pogo=/pogo/
 
-FROM dunglas/frankenphp AS runner
+FROM dunglas/frankenphp:1.10-php8.5.0-bookworm AS runner
 
-RUN install-php-extensions msgpack
+RUN install-php-extensions @composer msgpack
+
+COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 
 COPY . /app
 WORKDIR /app
 
-COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
+RUN composer install --prefer-dist --no-progress --no-interaction

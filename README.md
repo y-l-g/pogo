@@ -11,6 +11,8 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 - [Usage Examples](#usage-examples)
 - [API Reference](#api-reference)
 - [Architecture & Tech Stack](#architecture--tech-stack)
+- [Observability & Metrics](#observability--metrics)
+- [Quality Assurance & Testing](#quality-assurance--testing)
 - [The Protocol Specification](#the-protocol-specification)
 - [Current Status & Limitations](#current-status--limitations)
 
@@ -33,29 +35,35 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 ### Compilation
 
-This extension is designed to be compiled _into_ FrankenPHP or a custom Caddy build using `xcaddy`.
+This extension is designed to be compiled _into_ FrankenPHP or a custom Caddy build. You can build it manually using `xcaddy` or utilize the provided `Makefile` for a standardized development workflow.
 
-1. **Clone the Repository:**
+#### Option A: Using the Makefile (Recommended)
 
-   ```bash
-   git clone https://github.com/y-l-g/pogo.git
-   cd pogo
-   ```
+The project includes a robust `Makefile` to handle build profiles (Debug vs Release) and testing environments using Docker.
 
-2. **Build with XCaddy:**
-   You must point `xcaddy` to the local replacement or the published module.
+```bash
+# Build a Release image (Optimized, stripped symbols)
+make build-release
 
-   ```bash
-   CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
-   CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
-   XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx,nowatcher" \
-   CGO_ENABLED=1 \
-   xcaddy build \
-       --output frankenphp \
-       --with github.com/y-l-g/pogo=. \
-       --with github.com/dunglas/frankenphp/caddy \
-       --with github.com/dunglas/caddy-cbrotli
-   ```
+# Build a Debug image (Race Detector enabled, CGO Debugging symbols)
+make build-debug
+```
+
+#### Option B: Manual Build with XCaddy
+
+You must point `xcaddy` to the local replacement or the published module.
+
+```bash
+CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
+CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
+XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx,nowatcher" \
+CGO_ENABLED=1 \
+xcaddy build \
+    --output frankenphp \
+    --with github.com/y-l-g/pogo=. \
+    --with github.com/dunglas/frankenphp/caddy \
+    --with github.com/dunglas/caddy-cbrotli
+```
 
 ### Quick Start
 
@@ -392,7 +400,8 @@ This layer runs entirely in Go and serves as the kernel of the extension.
 
 - **Process Management:** Spawns `php-cli` processes using `exec.CommandContext`. This ensures that the Go runtime manages the lifecycle of the worker process group, automatically propagating cancellation signals and preventing zombie processes if the host terminates.
 - **Concurrency Model (Semaphore Pattern):** Worker spawning relies on a buffered channel semaphore. This ensures atomic acquisition of worker slots, eliminating race conditions during rapid scaling events where multiple goroutines might otherwise over-provision workers.
-- **Deadlock Prevention:** The Supervisor enforces strict read deadlines on worker pipes (`JobTimeout`). If a worker stalls, the Supervisor kills the process and releases the semaphore, ensuring the pool recovers automatically.
+- **Deadlock Prevention:** The Supervisor enforces strict read/write deadlines on worker IPC pipes. If a worker hangs during a handshake or execution, the Supervisor detects the timeout, forcibly kills the process, and releases the semaphore, ensuring the pool recovers automatically.
+- **Crash Loop Protection:** The system monitors worker uptime. If a worker dies instantly after spawning (e.g., config error), the Supervisor enforces a backoff penalty to prevent CPU spin-locking.
 - **Smart Dynamic Scaling:** The Supervisor calculates the **P95 Latency** of task wait times. Metric calculation uses a **Snapshot-Sort** strategy that runs outside the critical path, ensuring zero impact on job dispatch throughput.
 
 ### Layer B: The Registry (`pogo.go`)
@@ -428,6 +437,34 @@ A cross-platform abstraction for memory-mapped files.
   - **O(1) Complexity:** Unlike traditional bitmap or linear scan allocators, `Allocate` and `Free` operations are O(1).
   - **Fragmentation Strategy:** If a payload hits the physical end of the buffer, the allocator inserts virtual padding and wraps to the beginning. The padding is automatically marked as "freed" but blocks the head pointer until logically reached, preserving FIFO integrity.
   - **Throughput:** Capable of sustaining >800 MB/s in zero-copy benchmarks.
+
+---
+
+## Observability & Metrics
+
+Pogo embeds a lightweight **Prometheus Exporter** within the Supervisor. This allows real-time monitoring of the internal state without relying on PHP scripts (which might block).
+
+**Endpoint:** `http://localhost:9090/metrics`
+
+**Key Metrics:**
+
+| Metric Name            | Type  | Description                                               |
+| :--------------------- | :---- | :-------------------------------------------------------- |
+| `pogo_workers_active`  | Gauge | Number of workers currently executing a job.              |
+| `pogo_workers_total`   | Gauge | Total number of worker processes managed (Active + Idle). |
+| `pogo_ipc_queue_depth` | Gauge | Number of tasks waiting in the Go channel.                |
+| `pogo_go_goroutines`   | Gauge | Number of active Go routines (Leak detection).            |
+| `pogo_go_heap_bytes`   | Gauge | Memory usage of the Supervisor.                           |
+
+---
+
+## Quality Assurance & Testing
+
+Stability is the primary directive of Pogo. The codebase is verified using a rigorous multi-stage test suite executed via the `Makefile`.
+
+1. **Unit Tests (`make test-unit`):** Fast, deterministic tests running in both Go (standard library) and PHP (extension logic) environments.
+2. **The "Ouroboros" Torture Test (`make torture-ouroboros`):** A sustained load test that pushes hundreds of megabytes through the Shared Memory Ring Buffer to verify memory safety, buffer rotation, and zero-copy data integrity.
+3. **The "Chaos" Torture Test (`make torture-chaos`):** A resilience test that intentionally kills (`SIGKILL`, `exit(1)`) active worker processes while the system is under load. This verifies that the Supervisor detects dead workers, releases locks/semaphores, and respawns replacements without dropping pending requests.
 
 ---
 
@@ -469,3 +506,7 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Pogo\Channel` / `Pogo\WaitGroup` objects can be passed.
 2. **Windows Process Management:** While the SHM layer is now cross-platform, full process lifecycle management (signals) on Windows behaves differently than POSIX systems. Primary support targets Linux/MacOS.
 3. **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent. Increasing `shm_size` mitigates this.
+
+```
+
+```
