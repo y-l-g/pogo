@@ -4,8 +4,6 @@ name: Stability & Benchmarks
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - "v*"
 

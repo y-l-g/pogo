@@ -69,5 +69,8 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --prefer-dist --no-progress
 
+      - name: Run PHPStan (Static Analysis)
+        run: ./vendor/bin/phpstan analyze --error-format=github
+
       - name: Run PHP Tests
         run: ./frankenphp php-cli ./vendor/bin/phpunit

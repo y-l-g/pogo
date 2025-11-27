@@ -23,6 +23,8 @@ class Protocol implements ProtocolConstants
 
     private int $shmFd = -1;
     private bool $useMsgPack = false;
+
+    /** @phpstan-ignore-next-line Property written but not read yet (Planned feature) */
     private bool $useShm = false;
 
     public function __construct()
@@ -44,15 +46,20 @@ class Protocol implements ProtocolConstants
             });
 
             try {
-                $this->in = fopen("php://fd/$envIn", 'rb');
-                $this->out = fopen("php://fd/$envOut", 'wb');
+                // PHPStan Fix: Assign to temp var first to avoid assigning 'false' to property
+                $in = fopen("php://fd/$envIn", 'rb');
+                $out = fopen("php://fd/$envOut", 'wb');
             } finally {
                 restore_error_handler();
             }
 
-            if ($this->in === false || $this->out === false) {
+            // PHPStan: Validate resources explicitly before assignment
+            if (!is_resource($in) || !is_resource($out)) {
                 throw new IOException("Failed to open explicit IPC FDs ($envIn, $envOut)");
             }
+
+            $this->in = $in;
+            $this->out = $out;
 
             stream_set_write_buffer($this->out, 0);
             stream_set_read_buffer($this->in, 0);
@@ -80,7 +87,6 @@ class Protocol implements ProtocolConstants
                 $task = $this->read();
             } catch (IOException $e) {
                 // Critical Transport Failure (Host gone, Pipe broke)
-                // We must exit immediately to prevent zombie loops.
                 fwrite($this->err, "[Worker Shutdown] Transport lost: " . $e->getMessage() . "\n");
                 exit(0);
             } catch (Throwable $e) {
@@ -96,7 +102,8 @@ class Protocol implements ProtocolConstants
                 $jobClass = $task['job_class'] ?? null;
                 $payload = $task['payload'] ?? [];
 
-                if ($jobClass && class_exists($jobClass)) {
+                // PHPStan Fix: Validate $jobClass is a string before checking class existence
+                if (is_string($jobClass) && class_exists($jobClass)) {
                     $job = new $jobClass();
 
                     if (method_exists($job, 'handle')) {
@@ -106,10 +113,11 @@ class Protocol implements ProtocolConstants
                     }
                 }
 
-                $this->error("Protocol::run() could not execute job: " . ($jobClass ?? 'unknown'));
+                // PHPStan Fix: Ensure we don't concatenate mixed types
+                $safeJobName = is_string($jobClass) ? $jobClass : 'unknown';
+                $this->error("Protocol::run() could not execute job: " . $safeJobName);
 
             } catch (Throwable $e) {
-                // Application-level error. Report and continue.
                 $this->error($e->getMessage(), 'error', false, $e->getTraceAsString());
             }
         }
@@ -128,21 +136,32 @@ class Protocol implements ProtocolConstants
             throw new IOException("Handshake Failed: Invalid header.");
         }
 
-        if ($parts['type'] !== self::TYPE_HELLO) {
+        /** @var array{len: int, type: int} $parts */
+        $type = $parts['type'];
+
+        if ($type !== self::TYPE_HELLO) {
             throw new IOException(sprintf(
                 "Handshake Failed: Expected HELLO (0x03), got 0x%02X",
-                $parts['type']
+                $type
             ));
         }
 
-        $body = $this->readN($parts['len']);
+        /** @var array{len: int, type: int} $parts */
+        $len = $parts['len'];
+        $body = $this->readN($len);
+
         if ($body === false) {
             throw new IOException("Handshake Failed: Unexpected EOF reading body.");
         }
 
-        $this->handleHello(json_decode($body, true) ?: []);
+        /** @var array<string, mixed> $helloData */
+        $helloData = json_decode($body, true) ?: [];
+        $this->handleHello($helloData);
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function read(int $timeoutSeconds = 0): ?array
     {
         $read = [$this->in];
@@ -177,7 +196,9 @@ class Protocol implements ProtocolConstants
             throw new IOException("Failed to unpack packet header");
         }
 
+        /** @var array{len: int, type: int} $parts */
         $len = $parts['len'];
+        /** @var array{len: int, type: int} $parts */
         $type = $parts['type'];
 
         if ($type === self::TYPE_SHUTDOWN) {
@@ -191,7 +212,9 @@ class Protocol implements ProtocolConstants
             }
 
             if ($type === self::TYPE_HELLO) {
-                $this->handleHello(json_decode($body, true) ?: []);
+                /** @var array<string, mixed> $helloData */
+                $helloData = json_decode($body, true) ?: [];
+                $this->handleHello($helloData);
                 return $this->read($timeoutSeconds);
             }
 
@@ -201,28 +224,49 @@ class Protocol implements ProtocolConstants
                     throw new IOException("Failed to unpack SHM pointer");
                 }
 
+                /** @var array{offset: int, length: int} $shmParts */
                 $offset = $shmParts['offset'];
+                /** @var array{offset: int, length: int} $shmParts */
                 $length = $shmParts['length'];
 
                 if (!$this->useMsgPack && function_exists('Pogo\_shm_decode')) {
                     /** @var mixed */
-                    return \Pogo\_shm_decode($this->shmFd, $offset, $length);
+                    $shmResult = \Pogo\_shm_decode($this->shmFd, $offset, $length);
+                    if (!is_array($shmResult)) {
+                        throw new IOException("SHM Decode failed: expected array");
+                    }
+                    /** @var array<string, mixed> $shmResult */
+                    return $shmResult;
                 }
 
                 if (function_exists('Pogo\_shm_read')) {
+                    /** @var string */
                     $realBody = \Pogo\_shm_read($this->shmFd, $offset, $length);
-                    return $this->decode($realBody);
+                    $decoded = $this->decode($realBody);
+                    if (!is_array($decoded)) {
+                        throw new IOException("SHM Read decode failed: expected array");
+                    }
+                    /** @var array<string, mixed> $decoded */
+                    return $decoded;
                 } else {
                     throw new IOException("SHM packet received but infrastructure missing");
                 }
             }
 
-            return $this->decode($body);
+            $decoded = $this->decode($body);
+            if (!is_array($decoded)) {
+                throw new IOException("Packet decode failed: expected array payload");
+            }
+            /** @var array<string, mixed> $decoded */
+            return $decoded;
         }
 
         return [];
     }
 
+    /**
+     * @param array<string, mixed> $hello
+     */
     private function handleHello(array $hello): void
     {
         $canMsgPack = extension_loaded('msgpack');
@@ -250,7 +294,7 @@ class Protocol implements ProtocolConstants
         }
     }
 
-    private function decode(string $data)
+    private function decode(string $data): mixed
     {
         if ($this->useMsgPack) {
             return msgpack_unpack($data);
@@ -258,7 +302,7 @@ class Protocol implements ProtocolConstants
         return json_decode($data, true);
     }
 
-    public function send($result): void
+    public function send(mixed $result): void
     {
         $this->writePacket(['status' => 'success', 'result' => $result], self::TYPE_DATA);
     }
@@ -281,7 +325,6 @@ class Protocol implements ProtocolConstants
             $this->writePacket($payload, $packetType);
         } catch (IOException $e) {
             // If we can't report the error, logging is all we can do.
-            // Critical: Do not re-throw IOException here to avoid main loop crash for app-level errors.
             fwrite($this->err, "[Worker Error] Failed to report error to Host: " . $e->getMessage() . "\n");
         }
     }
@@ -291,6 +334,9 @@ class Protocol implements ProtocolConstants
         @fwrite($this->err, "[Worker Log] " . $msg . "\n");
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     private function writePacket(array $data, int $type, ?bool $forceMsgPack = null): void
     {
         $useMsgPack = $forceMsgPack !== null ? $forceMsgPack : $this->useMsgPack;
@@ -304,6 +350,7 @@ class Protocol implements ProtocolConstants
             }
         }
 
+        /** @var string $payload */
         $len = strlen($payload);
         $bin = pack('NC', $len, $type) . $payload;
 
@@ -351,14 +398,21 @@ class Protocol implements ProtocolConstants
         @fflush($this->out);
     }
 
-    private function readN(int $n)
+    private function readN(int $n): string|false
     {
         $data = '';
         $bytesRead = 0;
 
         while ($bytesRead < $n) {
+            // PHPStan Fix: fread expects int<1, max>.
+            // We must ensure the requested length is strictly positive.
+            $remaining = $n - $bytesRead;
+            if ($remaining <= 0) {
+                break;
+            }
+
             // Optimistic Read
-            $chunk = @fread($this->in, $n - $bytesRead);
+            $chunk = @fread($this->in, $remaining);
 
             if ($chunk === false) {
                 $err = error_get_last();
