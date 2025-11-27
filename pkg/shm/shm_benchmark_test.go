@@ -13,7 +13,7 @@ func BenchmarkAllocate(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to init SHM: %v", err)
 	}
-	defer shm.Close()
+	defer func() { _ = shm.Close() }()
 
 	payloadSize := 1024 // 1KB
 
@@ -40,7 +40,7 @@ func BenchmarkAllocateParallel(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to init SHM: %v", err)
 	}
-	defer shm.Close()
+	defer func() { _ = shm.Close() }()
 
 	payloadSize := 512 // 512 Bytes
 
@@ -65,7 +65,7 @@ func BenchmarkWriteAt(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to init SHM: %v", err)
 	}
-	defer shm.Close()
+	defer func() { _ = shm.Close() }()
 
 	data := make([]byte, 4096) // 4KB
 	_, _ = rand.Read(data)
