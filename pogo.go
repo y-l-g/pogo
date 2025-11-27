@@ -63,6 +63,10 @@ var (
 	poolRegistry  sync.Map // map[int64]*supervisor.Pool
 	poolIDCounter int64
 	defaultPool   *supervisor.Pool // ID 0
+
+	// Build Metadata (Injected via -ldflags)
+	Version = "dev"
+	Commit  = "none"
 )
 
 type BridgeLogger struct{}
@@ -107,7 +111,7 @@ func _gopogo_init(fn C.uintptr_t) {
 
 	log.SetOutput(&BridgeLogger{})
 	log.SetFlags(0)
-	log.Println("Go Pogo Extension Initialized (Log Bridge & Metrics Active)")
+	log.Printf("Go Pogo Extension Initialized (Log Bridge & Metrics Active) - %s (%s)", Version, Commit)
 }
 
 func init() {
@@ -124,6 +128,12 @@ func Pogo_shutdown_module() {
 		p.Shutdown()
 		return true
 	})
+}
+
+//export Pogo_version
+func Pogo_version() *C.char {
+	v := fmt.Sprintf("%s (%s)", Version, Commit)
+	return C.CString(v)
 }
 
 func RegisterPool(p *supervisor.Pool) int64 {

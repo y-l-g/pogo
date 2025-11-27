@@ -39,10 +39,11 @@ class CoreTest extends TestCase
     {
         $count = 4;
         $futures = [];
-        $start = microtime(true);
+        $sleepMs = 200;
 
+        // Use TimestampJob to get precise execution windows
         for ($i = 0; $i < $count; $i++) {
-            $futures[] = \Pogo\async('AsyncJob', ['sleep' => 200, 'data' => $i]);
+            $futures[] = \Pogo\async('TimestampJob', ['sleep' => $sleepMs]);
         }
 
         $results = [];
@@ -50,13 +51,22 @@ class CoreTest extends TestCase
             $results[] = $f->await(2.0);
         }
 
-        $duration = microtime(true) - $start;
-
         $this->assertCount($count, $results);
-        // 4 jobs * 200ms = 800ms sequential.
-        // With 4 workers, ideal is ~200ms + overhead.
-        // We set limit to 0.7 to allow for CI overhead/startup variance
-        // while still proving we are significantly faster than 0.8s.
-        $this->assertLessThan(0.7, $duration, "Jobs did not run in parallel (Duration: $duration)");
+
+        // Sort by start time to handle any dispatch jitter
+        usort($results, fn($a, $b) => $a['ts_start'] <=> $b['ts_start']);
+
+        $firstJob = $results[0];
+        $lastJob = $results[$count - 1];
+
+        // State-Based Assertion:
+        // Parallelism is proven if the last job starts BEFORE the first job ends.
+        // This implies they were running simultaneously.
+        // If they were sequential, LastStart would be > FirstEnd.
+        $this->assertLessThan(
+            $firstJob['ts_end'],
+            $lastJob['ts_start'],
+            "Jobs did not overlap in time (Sequential execution detected). First End: {$firstJob['ts_end']}, Last Start: {$lastJob['ts_start']}"
+        );
     }
 }

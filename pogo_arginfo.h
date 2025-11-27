@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 197ca9fed088def349dcd5b4c6fcfe855e39c19e */
+ * Stub hash: 6f3578fb064731af7f600b1bad062653db9f16e5 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Pogo__gopogo_init, 0, 0, IS_VOID, 0)
 ZEND_END_ARG_INFO()
@@ -52,6 +52,9 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Pogo_get_pool_stats, 0, 0, IS_AR
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, poolID, IS_LONG, 0, "0")
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Pogo_version, 0, 0, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Pogo_Future___construct, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
@@ -84,8 +87,7 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Pogo_Channel_push, 0, 1, I
 	ZEND_ARG_TYPE_INFO(0, value, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Pogo_Channel_pop, 0, 0, IS_STRING, 0)
-ZEND_END_ARG_INFO()
+#define arginfo_class_Pogo_Channel_pop arginfo_Pogo_version
 
 #define arginfo_class_Pogo_Channel_close arginfo_Pogo__gopogo_init
 
@@ -118,6 +120,7 @@ ZEND_FUNCTION(Pogo_dispatch_task);
 ZEND_FUNCTION(Pogo_select);
 ZEND_FUNCTION(Pogo_async);
 ZEND_FUNCTION(Pogo_get_pool_stats);
+ZEND_FUNCTION(Pogo_version);
 ZEND_METHOD(Pogo_Future, __construct);
 ZEND_METHOD(Pogo_Future, await);
 ZEND_METHOD(Pogo_Future, done);
@@ -147,6 +150,7 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Pogo", "select"), zif_Pogo_select, arginfo_Pogo_select, 0, NULL, NULL)
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Pogo", "async"), zif_Pogo_async, arginfo_Pogo_async, 0, NULL, NULL)
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Pogo", "get_pool_stats"), zif_Pogo_get_pool_stats, arginfo_Pogo_get_pool_stats, 0, NULL, NULL)
+	ZEND_RAW_FENTRY(ZEND_NS_NAME("Pogo", "version"), zif_Pogo_version, arginfo_Pogo_version, 0, NULL, NULL)
 	ZEND_FE_END
 };
 

@@ -1,0 +1,86 @@
+name: Benchmark CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  compare-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          path: main-code
+
+      - working-directory: main-code
+        run: |
+          go test -bench=. -benchmem -count=5 -run=^$ ./pkg/... > ../main_bench.txt
+
+      - uses: actions/checkout@v3
+        with:
+          path: pr-code
+
+      - working-directory: pr-code
+        run: |
+          go test -bench=. -benchmem -count=5 -run=^$ ./pkg/... > ../pr_bench.txt
+
+      - id: benchstat
+        run: |
+          echo "REPORT<<EOF" >> $GITHUB_OUTPUT
+          benchstat main_bench.txt pr_bench.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - uses: actions/github-script@v6
+        env:
+          REPORT: ${{ steps.benchstat.outputs.REPORT }}
+        with:
+          script: |
+            const output = `
+            ### Benchmark Comparison
+            \`\`\`
+            ${process.env.REPORT}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  history-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - run: go test -bench=. -benchmem ./pkg/... | tee output.txt
+
+      - uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "go"
+          output-file-path: output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: "120%"
+          comment-on-alert: true
+          fail-on-alert: false

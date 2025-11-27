@@ -17,3 +17,6 @@ pogo_test.go export-ignore
 proc_attr_linux.go export-ignore
 proc_attr_other.go export-ignore
 shm.go export-ignore
+mem.out export-ignore
+cpu.out export-ignore
+supervisor.test

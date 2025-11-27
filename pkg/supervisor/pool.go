@@ -58,11 +58,17 @@ func (w *phpWorker) setLastActive(t time.Time) {
 	w.lastActive = t
 }
 
+type TestHooks struct {
+	WorkerStarted chan int
+	WorkerKilled  chan int
+}
+
 type PoolConfig struct {
 	ShmSize      int64
 	IpcTimeout   time.Duration
 	JobTimeout   time.Duration
 	ScaleLatency int64
+	TestHooks    *TestHooks
 }
 
 type LatencyTracker struct {
@@ -285,8 +291,6 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 				if w != nil {
 					p.updatePeakWorkers()
 					p.workers <- w
-				} else {
-					<-p.workerSemaphore
 				}
 			default:
 				log.Printf("[Pool %d] Warn: Min workers > Max workers capacity?", p.ID)
@@ -346,8 +350,6 @@ func (p *Pool) checkScaling() {
 				w := p.spawnWorker()
 				if w != nil {
 					p.workers <- w
-				} else {
-					<-p.workerSemaphore
 				}
 			default:
 			}
@@ -498,8 +500,6 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 					newW := p.spawnWorker()
 					if newW != nil {
 						worker = newW
-					} else {
-						<-p.workerSemaphore
 					}
 				default:
 				}
@@ -710,6 +710,14 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 
 func (p *Pool) spawnWorker() *phpWorker {
 	if p.ctx.Err() != nil {
+		// We are shutting down, so we don't start a worker.
+		// Caller should have checked ctx, but if they are blocked on semaphore...
+		// If we return nil, we must ensure semaphore is released IF we own the slot.
+		// Since we didn't start a goroutine, we should release.
+		select {
+		case <-p.workerSemaphore:
+		default:
+		}
 		return nil
 	}
 
@@ -776,6 +784,12 @@ func (p *Pool) spawnWorker() *phpWorker {
 		p.workersListMu.Lock()
 		delete(p.workersList, id)
 		p.workersListMu.Unlock()
+
+		// FAILED TO START: Release Semaphore immediately.
+		select {
+		case <-p.workerSemaphore:
+		default:
+		}
 		return nil
 	}
 
@@ -784,11 +798,19 @@ func (p *Pool) spawnWorker() *phpWorker {
 	_ = childRead.Close()
 	_ = childWrite.Close()
 
+	// Goroutine owns the semaphore slot now.
 	go func() {
 		_ = cmd.Wait()
 		worker.dead.Store(true)
 
 		MetricWorkerKill(p.ID)
+
+		if p.config.TestHooks != nil && p.config.TestHooks.WorkerKilled != nil {
+			select {
+			case p.config.TestHooks.WorkerKilled <- worker.id:
+			default:
+			}
+		}
 
 		p.workersListMu.Lock()
 		delete(p.workersList, id)
@@ -811,8 +833,6 @@ func (p *Pool) spawnWorker() *phpWorker {
 					newW := p.spawnWorker()
 					if newW != nil {
 						p.workers <- newW
-					} else {
-						<-p.workerSemaphore
 					}
 				default:
 				}
@@ -832,6 +852,13 @@ func (p *Pool) spawnWorker() *phpWorker {
 		}
 		p.killWorker(worker, nil, "")
 		return nil
+	}
+
+	if p.config.TestHooks != nil && p.config.TestHooks.WorkerStarted != nil {
+		select {
+		case p.config.TestHooks.WorkerStarted <- worker.id:
+		default:
+		}
 	}
 
 	return worker

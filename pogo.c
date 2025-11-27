@@ -446,6 +446,13 @@ PHP_FUNCTION(Pogo_get_pool_stats)
     free(json_res);
 }
 
+PHP_FUNCTION(Pogo_version)
+{
+    char *v = Pogo_version();
+    RETVAL_STRING(v);
+    free(v);
+}
+
 PHP_METHOD(Pogo_Runtime_Pool, __construct) {
     char *entrypoint;
     size_t entry_len;

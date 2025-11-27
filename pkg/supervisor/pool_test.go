@@ -25,9 +25,7 @@ func TestCrashResilience(t *testing.T) {
 		t.Fatalf("Failed to get executable: %v", err)
 	}
 
-	// Set env vars for the pool to pick up
 	setEnvOrFatal(t, "POGO_TEST_PHP_BINARY", exe)
-	// Set env vars for the worker process to behave correctly
 	setEnvOrFatal(t, "GO_WANT_HELPER_PROCESS", "1")
 	setEnvOrFatal(t, "POGO_MOCK_WORKER_MODE", "crash_immediate")
 
@@ -37,7 +35,6 @@ func TestCrashResilience(t *testing.T) {
 		unsetEnvOrFatal(t, "POGO_MOCK_WORKER_MODE")
 	}()
 
-	// 2. Initialize Pool
 	p := NewPool(999)
 
 	defer func() {
@@ -47,25 +44,42 @@ func TestCrashResilience(t *testing.T) {
 		p.Shutdown()
 	}()
 
+	workerKilled := make(chan int, 10)
+	// Note: We don't monitor WorkerStarted here because crash_immediate might crash
+	// before the handshake completes, meaning spawnWorker returns nil and doesn't
+	// fire WorkerStarted. However, WorkerKilled MUST fire when cmd.Wait() returns.
+
 	cfg := PoolConfig{
 		ShmSize:      1024 * 1024,
 		IpcTimeout:   100 * time.Millisecond,
 		ScaleLatency: 50,
+		TestHooks: &TestHooks{
+			WorkerKilled: workerKilled,
+		},
 	}
 
 	t.Log("Starting Pool with Mock Worker (Crash Mode)...")
-	// The entrypoint becomes the flag passed to the binary
 	p.Start("-test.run=TestHelperProcess", 1, 1, 0, cfg)
 
-	// 3. Wait for the crash cycle to stabilize
-	// The backoff is 500ms, so 1.5s allows ~2 restart attempts.
-	time.Sleep(1500 * time.Millisecond)
+	// Wait for the first worker to die
+	select {
+	case id := <-workerKilled:
+		t.Logf("Worker #%d died as expected.", id)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timeout waiting for initial worker crash")
+	}
+
+	// The supervisor should try to respawn.
+	// Wait for the second worker to die (proving the loop is active)
+	select {
+	case id := <-workerKilled:
+		t.Logf("Replacement Worker #%d died as expected.", id)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timeout waiting for replacement worker crash")
+	}
 
 	stats := p.GetStats()
-	// We expect workers to be crashing, so active might be 0 or 1 depending on timing,
-	// but the Supervisor must still be alive.
 	t.Logf("Stats: %+v", stats)
-
 	t.Log("Supervisor survived crash cycle without hanging.")
 }
 
@@ -77,7 +91,7 @@ func TestNormalOperation(t *testing.T) {
 
 	setEnvOrFatal(t, "POGO_TEST_PHP_BINARY", exe)
 	setEnvOrFatal(t, "GO_WANT_HELPER_PROCESS", "1")
-	setEnvOrFatal(t, "POGO_MOCK_WORKER_MODE", "normal") // Normal echo mode
+	setEnvOrFatal(t, "POGO_MOCK_WORKER_MODE", "normal")
 
 	defer func() {
 		unsetEnvOrFatal(t, "POGO_TEST_PHP_BINARY")
@@ -88,16 +102,26 @@ func TestNormalOperation(t *testing.T) {
 	p := NewPool(1000)
 	defer p.Shutdown()
 
+	workerStarted := make(chan int, 1)
+
 	cfg := PoolConfig{
 		ShmSize:      1024 * 1024,
 		IpcTimeout:   2000 * time.Millisecond,
 		ScaleLatency: 50,
+		TestHooks: &TestHooks{
+			WorkerStarted: workerStarted,
+		},
 	}
 
 	p.Start("-test.run=TestHelperProcess", 1, 1, 0, cfg)
 
-	// Wait for boot
-	time.Sleep(500 * time.Millisecond)
+	// Wait for boot via channel instead of sleep
+	select {
+	case id := <-workerStarted:
+		t.Logf("Worker #%d started successfully.", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for worker start")
+	}
 
 	stats := p.GetStats()
 	if stats["total_workers"] != 1 {

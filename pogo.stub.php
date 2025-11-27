@@ -58,6 +58,11 @@ namespace Pogo {
      */
     function get_pool_stats(int $poolID = 0): array {}
 
+    /**
+     * Returns the Pogo extension version.
+     */
+    function version(): string {}
+
     class Future
     {
         private mixed $result = null;
