@@ -1,8 +1,0 @@
-services:
-  pogo:
-    build:
-      context: .
-    ports:
-      - "8080:80"
-    environment:
-      - CADDY_GLOBAL_OPTIONS=debug

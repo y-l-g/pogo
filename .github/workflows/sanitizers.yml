@@ -3,8 +3,11 @@ name: Sanitizers
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * 0"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
 
 jobs:
   sanitizers:

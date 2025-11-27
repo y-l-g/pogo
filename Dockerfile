@@ -1,4 +1,4 @@
-FROM dunglas/frankenphp:builder AS builder
+FROM dunglas/frankenphp:1.10-builder-php8.5.0-bookworm AS builder
 
 COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
 
@@ -18,11 +18,8 @@ RUN CGO_ENABLED=1 \
     --with github.com/dunglas/vulcain/caddy \
     --with github.com/y-l-g/pogo=/pogo/
 
-FROM dunglas/frankenphp AS runner
+FROM dunglas/frankenphp:1.10-php8.5.0-bookworm AS runner
 
 RUN install-php-extensions msgpack
-
-COPY . /app
-WORKDIR /app
 
 COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
