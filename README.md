@@ -1,4 +1,4 @@
-# Pogo (PHP Over Go)
+# FrankenPHP Pogo (PHP Over Go)
 
 The **FrankenPHP Pogo Extension** is a high-performance, systems-level library designed to introduce **True Parallelism**, **Go-native Concurrency Primitives**, and **OS-Level Process Management** into the PHP ecosystem.
 
@@ -12,6 +12,7 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 - [API Reference](#api-reference)
 - [Architecture & Tech Stack](#architecture--tech-stack)
 - [Observability & Metrics](#observability--metrics)
+- [Performance Engineering](#performance-engineering)
 - [Quality Assurance & Testing](#quality-assurance--testing)
 - [The Protocol Specification](#the-protocol-specification)
 - [Current Status & Limitations](#current-status--limitations)
@@ -30,40 +31,6 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
    - **Large Payloads (>1KB):** Transparently switch to **Shared Memory (Mmap)**. This version utilizes a **Map-Backed FIFO Ring Buffer** to bypass pipe buffer limitations and reduce syscall overhead, achieving throughputs exceeding 800 MB/s.
 
 ---
-
-## Installation & Setup
-
-### Compilation
-
-This extension is designed to be compiled _into_ FrankenPHP or a custom Caddy build. You can build it manually using `xcaddy` or utilize the provided `Makefile` for a standardized development workflow.
-
-#### Option A: Using the Makefile (Recommended)
-
-The project includes a robust `Makefile` to handle build profiles (Debug vs Release) and testing environments using Docker.
-
-```bash
-# Build a Release image (Optimized, stripped symbols)
-make build-release
-
-# Build a Debug image (Race Detector enabled, CGO Debugging symbols)
-make build-debug
-```
-
-#### Option B: Manual Build with XCaddy
-
-You must point `xcaddy` to the local replacement or the published module.
-
-```bash
-CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
-CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
-XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx,nowatcher" \
-CGO_ENABLED=1 \
-xcaddy build \
-    --output frankenphp \
-    --with github.com/y-l-g/pogo=. \
-    --with github.com/dunglas/frankenphp/caddy \
-    --with github.com/dunglas/caddy-cbrotli
-```
 
 ### Quick Start
 
@@ -141,7 +108,7 @@ Mount your current directory into the pre-built image.
 docker run --rm -p 8080:80 \
   -v "${PWD}:/app" \
   -e SERVER_NAME=:80 \
-  ghcr.io/y-l-g/pogo:main
+  pogo:latest
 ```
 
 **Option B: Using Linux Binary**
@@ -213,7 +180,7 @@ $results = [
 
 ### Scenario 3: The "Select" Pattern (Race)
 
-Wait for the first result from multiple sources, or timeout.
+Wait for the first result from multiple sources, or timeout. This is equivalent to Go's `select` statement and is optimized in the C-layer for O(1) performance even with many channels.
 
 ```php
 $ch1 = new Pogo\Channel();
@@ -330,7 +297,15 @@ Returns real-time observability metrics from the Go Supervisor.
 
 **Returns**
 
-- `array` — Structure: `['active_workers' => int, 'total_workers' => int, 'peak_workers' => int, 'queue_depth' => int, 'map_size' => int, 'p95_wait_ms' => int]`.
+- `array` — Structure: `['active_workers' => int, 'total_workers' => int, 'peak_workers' => int, 'queue_depth' => int, 'map_size' => int, 'p95_wait_ms' => int, 'shm_total_bytes' => int, 'shm_used_bytes' => int]`.
+
+#### `Pogo\version`
+
+```php
+function version(): string
+```
+
+Returns the extension version and build commit hash (e.g., `v1.2.3 (abcdef)`). Useful for diagnostics and logging.
 
 ### Internal Functions (Advanced)
 
@@ -401,7 +376,7 @@ This layer runs entirely in Go and serves as the kernel of the extension.
 - **Process Management:** Spawns `php-cli` processes using `exec.CommandContext`. This ensures that the Go runtime manages the lifecycle of the worker process group, automatically propagating cancellation signals and preventing zombie processes if the host terminates.
 - **Concurrency Model (Semaphore Pattern):** Worker spawning relies on a buffered channel semaphore. This ensures atomic acquisition of worker slots, eliminating race conditions during rapid scaling events where multiple goroutines might otherwise over-provision workers.
 - **Deadlock Prevention:** The Supervisor enforces strict read/write deadlines on worker IPC pipes. If a worker hangs during a handshake or execution, the Supervisor detects the timeout, forcibly kills the process, and releases the semaphore, ensuring the pool recovers automatically.
-- **Crash Loop Protection:** The system monitors worker uptime. If a worker dies instantly after spawning (e.g., config error), the Supervisor enforces a backoff penalty to prevent CPU spin-locking.
+- **Test Hooks:** The Supervisor includes internal hooks (`WorkerStarted`, `WorkerKilled`) that allow integration tests to synchronize deterministically with process lifecycle events, eliminating the need for flaky `time.Sleep` calls.
 - **Smart Dynamic Scaling:** The Supervisor calculates the **P95 Latency** of task wait times. Metric calculation uses a **Snapshot-Sort** strategy that runs outside the critical path, ensuring zero impact on job dispatch throughput.
 
 ### Layer B: The Registry (`pogo.go`)
@@ -458,11 +433,45 @@ Pogo embeds a lightweight **Prometheus Exporter** within the Supervisor. This al
 
 ---
 
+## Performance Engineering
+
+We provide built-in tooling to benchmark and profile the extension's performance.
+
+### Micro-Benchmarks
+
+You can run the Go-level micro-benchmarks to verify allocation strategies and dispatch latency:
+
+```bash
+make bench
+```
+
+This tests:
+
+- **Shared Memory:** Allocation/Free ops/sec under contention.
+- **Serialization:** MsgPack vs JSON efficiency.
+- **Internal Bus:** Go Runtime dispatch overhead (excluding PHP process overhead).
+
+### Profiling
+
+To visualize CPU or Memory usage using `go tool pprof` (requires Graphviz):
+
+```bash
+# CPU Flamegraph
+make profile-cpu
+
+# Memory Allocations
+make profile-mem
+```
+
+---
+
 ## Quality Assurance & Testing
 
 Stability is the primary directive of Pogo. The codebase is verified using a rigorous multi-stage test suite executed via the `Makefile`.
 
 1. **Unit Tests (`make test-unit`):** Fast, deterministic tests running in both Go (standard library) and PHP (extension logic) environments.
+   - **Test Hygiene:** Our Go tests utilize channel-based hooks instead of `time.Sleep` to ensure tests are fast and non-flaky.
+   - **State-Based Assertions:** PHP parallel execution tests use timestamp overlap verification rather than wall-clock duration thresholds, ensuring reliability on variable-speed CI runners.
 2. **The "Ouroboros" Torture Test (`make torture-ouroboros`):** A sustained load test that pushes hundreds of megabytes through the Shared Memory Ring Buffer to verify memory safety, buffer rotation, and zero-copy data integrity.
 3. **The "Chaos" Torture Test (`make torture-chaos`):** A resilience test that intentionally kills (`SIGKILL`, `exit(1)`) active worker processes while the system is under load. This verifies that the Supervisor detects dead workers, releases locks/semaphores, and respawns replacements without dropping pending requests.
 
