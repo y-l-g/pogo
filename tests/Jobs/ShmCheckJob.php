@@ -9,13 +9,13 @@ class ShmCheckJob implements \Pogo\Contract\JobInterface
         // FD 5 is default in tests
         $fd = 5;
 
-        // Check availability
-        if (!Pogo\_shm_check($fd)) {
+        // Check availability using the new Internal namespace
+        if (!function_exists('Pogo\Internal\_shm_check') || !\Pogo\Internal\_shm_check($fd)) {
             return "SHM Not Available";
         }
 
         // Read signature (5 bytes)
         // Go writes "GOSHM" at offset 0
-        return Pogo\_shm_read($fd, 0, 5);
+        return \Pogo\Internal\_shm_read($fd, 0, 5);
     }
 }

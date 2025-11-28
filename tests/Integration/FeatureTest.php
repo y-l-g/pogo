@@ -17,7 +17,8 @@ class FeatureTest extends TestCase
         $ch = new Channel();
         $ch->init(1);
 
-        $res = \Pogo\async('NestedJob', ['deep' => ['chan' => $ch]])->await();
+        // Pass internal handle to support marshalling
+        $res = \Pogo\async('NestedJob', ['deep' => ['chan' => $ch->getInternal()]])->await();
 
         $this->assertTrue($res['is_handle']);
         $this->assertIsInt($res['received_val']);

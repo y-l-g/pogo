@@ -3,7 +3,7 @@
 #include <zend_exceptions.h>
 #include "pogo.h"
 #include "pogo_arginfo.h"
-#include "pogo_consts.h" // Generated Constants
+#include "pogo_consts.h" 
 #include "_cgo_export.h"
 
 // SHM Includes
@@ -67,86 +67,11 @@ static void shm_registry_dtor(zval *pDest) {
     }
 }
 
-static int internal_process_result(zval *future_obj, char *raw_res) {
-    zval decoded_response;
-    zend_string *json_str = zend_string_init(raw_res, strlen(raw_res), 0);
-
-    php_json_decode(&decoded_response, ZSTR_VAL(json_str), (int)ZSTR_LEN(json_str), 1, PHP_JSON_PARSER_DEFAULT_DEPTH);
-    zend_string_release(json_str);
-    free(raw_res);
-
-    if (Z_TYPE(decoded_response) != IS_ARRAY) {
-        zval_ptr_dtor(&decoded_response);
-        zval error_val;
-        ZVAL_STRING(&error_val, "Invalid response format from worker");
-        zend_update_property(go_future_ce, Z_OBJ_P(future_obj), "error", sizeof("error")-1, &error_val);
-        zend_update_property_bool(go_future_ce, Z_OBJ_P(future_obj), "resolved", sizeof("resolved")-1, 1);
-        zval_ptr_dtor(&error_val);
-        zend_throw_exception(go_worker_exception_ce, "Invalid response format from worker", 0);
-        return FAILURE;
-    }
-
-    zval *status = zend_hash_str_find(Z_ARRVAL(decoded_response), "status", sizeof("status")-1);
-    if (status && Z_TYPE_P(status) == IS_STRING) {
-        if (strcmp(Z_STRVAL_P(status), "error") == 0) {
-             zval *msg = zend_hash_str_find(Z_ARRVAL(decoded_response), "message", sizeof("message")-1);
-             zval *trace = zend_hash_str_find(Z_ARRVAL(decoded_response), "trace", sizeof("trace")-1);
-
-             char *error_msg = "Unknown worker error";
-             if (msg && Z_TYPE_P(msg) == IS_STRING) {
-                 error_msg = Z_STRVAL_P(msg);
-             }
-
-             zend_string *full_msg;
-             if (trace && Z_TYPE_P(trace) == IS_STRING) {
-                 full_msg = zend_string_init(error_msg, strlen(error_msg), 0);
-                 zend_string *trace_str = Z_STR_P(trace);
-                 zend_string *tmp = zend_string_concat3(
-                     ZSTR_VAL(full_msg), ZSTR_LEN(full_msg),
-                     "\n--- Remote Trace ---\n", sizeof("\n--- Remote Trace ---\n") - 1,
-                     ZSTR_VAL(trace_str), ZSTR_LEN(trace_str)
-                 );
-                 zend_string_release(full_msg);
-                 full_msg = tmp;
-             } else {
-                 full_msg = zend_string_init(error_msg, strlen(error_msg), 0);
-             }
-
-             zval error_val;
-             ZVAL_STR(&error_val, full_msg);
-
-             zend_update_property(go_future_ce, Z_OBJ_P(future_obj), "error", sizeof("error")-1, &error_val);
-             zend_update_property_bool(go_future_ce, Z_OBJ_P(future_obj), "resolved", sizeof("resolved")-1, 1);
-
-             zend_throw_exception(go_worker_exception_ce, ZSTR_VAL(full_msg), 0);
-
-             zval_ptr_dtor(&error_val);
-             zval_ptr_dtor(&decoded_response);
-             return FAILURE;
-        }
-    }
-
-    zval *result = zend_hash_str_find(Z_ARRVAL(decoded_response), "result", sizeof("result")-1);
-    if (!result) {
-        zval_ptr_dtor(&decoded_response);
-        zval null_val;
-        ZVAL_NULL(&null_val);
-        zend_update_property(go_future_ce, Z_OBJ_P(future_obj), "result", sizeof("result")-1, &null_val);
-        zend_update_property_bool(go_future_ce, Z_OBJ_P(future_obj), "resolved", sizeof("resolved")-1, 1);
-        return SUCCESS;
-    }
-
-    zend_update_property(go_future_ce, Z_OBJ_P(future_obj), "result", sizeof("result")-1, result);
-    zend_update_property_bool(go_future_ce, Z_OBJ_P(future_obj), "resolved", sizeof("resolved")-1, 1);
-    zval_ptr_dtor(&decoded_response);
-    return SUCCESS;
-}
-
-PHP_FUNCTION(Pogo__gopogo_init) {
+PHP_FUNCTION(Pogo_Internal__gopogo_init) {
     _gopogo_init((uintptr_t)proxy_log);
 }
 
-PHP_FUNCTION(Pogo__shm_check) {
+PHP_FUNCTION(Pogo_Internal__shm_check) {
     zend_long fd;
     ZEND_PARSE_PARAMETERS_START(1, 1)
         Z_PARAM_LONG(fd)
@@ -154,7 +79,7 @@ PHP_FUNCTION(Pogo__shm_check) {
     RETURN_BOOL(zend_hash_index_find(&shm_registry, (zend_ulong)fd) != NULL);
 }
 
-PHP_FUNCTION(Pogo__shm_read) {
+PHP_FUNCTION(Pogo_Internal__shm_read) {
     zend_long fd, offset, length;
     ZEND_PARSE_PARAMETERS_START(3, 3)
         Z_PARAM_LONG(fd)
@@ -182,7 +107,7 @@ PHP_FUNCTION(Pogo__shm_read) {
     RETURN_STRINGL(region->base + offset + 1, length);
 }
 
-PHP_FUNCTION(Pogo__shm_decode) {
+PHP_FUNCTION(Pogo_Internal__shm_decode) {
     zend_long fd, offset, length;
     ZEND_PARSE_PARAMETERS_START(3, 3)
         Z_PARAM_LONG(fd)
@@ -207,7 +132,7 @@ PHP_FUNCTION(Pogo__shm_decode) {
     php_json_decode(return_value, region->base + offset + 1, (int)length, 1, PHP_JSON_PARSER_DEFAULT_DEPTH);
 }
 
-PHP_FUNCTION(Pogo_start_worker_pool)
+PHP_FUNCTION(Pogo_Internal_start_worker_pool)
 {
     char *entrypoint = "job_runner.php";
     size_t entry_len = sizeof("job_runner.php") - 1;
@@ -228,7 +153,7 @@ PHP_FUNCTION(Pogo_start_worker_pool)
     zend_long shm_size = 64 * 1024 * 1024;
     zend_long ipc_timeout_ms = 500;
     zend_long scale_latency_ms = 50;
-    zend_long job_timeout_ms = 0; // Default 0 (No Timeout)
+    zend_long job_timeout_ms = 0;
 
     if (options) {
         HashTable *ht = Z_ARRVAL_P(options);
@@ -250,7 +175,7 @@ PHP_FUNCTION(Pogo_start_worker_pool)
     start_workers_wrapper(entrypoint, (int)entry_len, min_workers, max_workers, max_jobs, shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
-PHP_FUNCTION(Pogo_dispatch)
+PHP_FUNCTION(Pogo_Internal_dispatch)
 {
     char *name;
     size_t name_len;
@@ -264,7 +189,7 @@ PHP_FUNCTION(Pogo_dispatch)
     dispatch_wrapper(name, (int)name_len, payload);
 }
 
-PHP_FUNCTION(Pogo_dispatch_task)
+PHP_FUNCTION(Pogo_Internal_dispatch_task)
 {
     char *task_name;
     size_t task_name_len;
@@ -286,20 +211,10 @@ PHP_FUNCTION(Pogo_dispatch_task)
 
     pogo_object *intern_fut = pogo_object_from_obj(Z_OBJ_P(return_value));
     intern_fut->go_handle = ch_handle;
-    intern_fut->owns_handle = false;
-
-    zval channel_obj;
-    object_init_ex(&channel_obj, go_channel_ce);
-
-    pogo_object *intern_ch = pogo_object_from_obj(Z_OBJ(channel_obj));
-    intern_ch->go_handle = ch_handle;
-    intern_ch->owns_handle = true;
-
-    zend_update_property(go_future_ce, Z_OBJ_P(return_value), "channel", sizeof("channel")-1, &channel_obj);
-    zval_ptr_dtor(&channel_obj);
+    intern_fut->owns_handle = true; // FIX: Future owns the handle
 }
 
-PHP_FUNCTION(Pogo_async)
+PHP_FUNCTION(Pogo_Internal_async)
 {
     char *class_name;
     size_t class_name_len;
@@ -321,26 +236,16 @@ PHP_FUNCTION(Pogo_async)
 
     pogo_object *intern_fut = pogo_object_from_obj(Z_OBJ_P(return_value));
     intern_fut->go_handle = ch_handle;
-    intern_fut->owns_handle = false;
-
-    zval channel_obj;
-    object_init_ex(&channel_obj, go_channel_ce);
-
-    pogo_object *intern_ch = pogo_object_from_obj(Z_OBJ(channel_obj));
-    intern_ch->go_handle = ch_handle;
-    intern_ch->owns_handle = true;
-
-    zend_update_property(go_future_ce, Z_OBJ_P(return_value), "channel", sizeof("channel")-1, &channel_obj);
-    zval_ptr_dtor(&channel_obj);
+    intern_fut->owns_handle = true; // FIX: Future owns the handle
 }
 
 typedef struct {
     zend_string *str_key;
     zend_ulong num_key;
-    int key_type; // HASH_KEY_IS_STRING or HASH_KEY_IS_LONG
+    int key_type;
 } select_key_t;
 
-PHP_FUNCTION(Pogo_select)
+PHP_FUNCTION(Pogo_Internal_select)
 {
     zval *cases;
     double timeout = -1.0;
@@ -358,7 +263,6 @@ PHP_FUNCTION(Pogo_select)
         RETURN_NULL();
     }
 
-    // Allocate buffers
     uintptr_t *handles = safe_emalloc(count, sizeof(uintptr_t), 0);
     select_key_t *keys = safe_emalloc(count, sizeof(select_key_t), 0);
 
@@ -368,22 +272,19 @@ PHP_FUNCTION(Pogo_select)
     zend_ulong num_key;
 
     ZEND_HASH_FOREACH_KEY_VAL(ht, num_key, str_key, val) {
-        // Store Key info
         if (str_key) {
             keys[i].key_type = HASH_KEY_IS_STRING;
             keys[i].str_key = str_key;
-            zend_string_addref(str_key); // Protect from GC during call? Not strictly needed as array is kept alive, but safe.
+            zend_string_addref(str_key);
         } else {
             keys[i].key_type = HASH_KEY_IS_LONG;
             keys[i].num_key = num_key;
         }
 
-        // Extract Handle
         uintptr_t handle = 0;
         if (Z_TYPE_P(val) == IS_OBJECT) {
-            zend_object *obj = Z_OBJ_P(val);
-            if (obj->ce == go_channel_ce || obj->ce == go_future_ce) {
-                pogo_object *intern = pogo_object_from_obj(obj);
+            if (Z_OBJ_P(val)->ce == go_channel_ce || Z_OBJ_P(val)->ce == go_future_ce) {
+                pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(val));
                 handle = intern->go_handle;
             }
         }
@@ -391,11 +292,8 @@ PHP_FUNCTION(Pogo_select)
         i++;
     } ZEND_HASH_FOREACH_END();
 
-    // Call Go wrapper
-    // We pass the handle array pointer. Go will create a slice from it.
     select_result res = select_wrapper(handles, count, timeout);
 
-    // Cleanup Key Refs
     for(int j=0; j<count; j++) {
         if (keys[j].key_type == HASH_KEY_IS_STRING) {
             zend_string_release(keys[j].str_key);
@@ -405,10 +303,9 @@ PHP_FUNCTION(Pogo_select)
 
     if (res.status == 1) {
         efree(keys);
-        RETURN_NULL(); // Timeout
+        RETURN_NULL();
     }
 
-    // Map index back to key
     array_init(return_value);
     int idx = (int)res.index;
 
@@ -429,7 +326,7 @@ PHP_FUNCTION(Pogo_select)
     }
 }
 
-PHP_FUNCTION(Pogo_get_pool_stats)
+PHP_FUNCTION(Pogo_Internal_get_pool_stats)
 {
     zend_long poolID = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -438,22 +335,20 @@ PHP_FUNCTION(Pogo_get_pool_stats)
     ZEND_PARSE_PARAMETERS_END();
 
     char *json_res = get_pool_stats_wrapper((long)poolID);
-    if (json_res == NULL) RETURN_EMPTY_ARRAY();
+    if (json_res == NULL) RETURN_EMPTY_STRING();
 
-    zend_string *json_str = zend_string_init(json_res, strlen(json_res), 0);
-    php_json_decode(return_value, ZSTR_VAL(json_str), (int)ZSTR_LEN(json_str), 1, PHP_JSON_PARSER_DEFAULT_DEPTH);
-    zend_string_release(json_str);
+    RETVAL_STRING(json_res);
     free(json_res);
 }
 
-PHP_FUNCTION(Pogo_version)
+PHP_FUNCTION(Pogo_Internal_version)
 {
     char *v = Pogo_version();
     RETVAL_STRING(v);
     free(v);
 }
 
-PHP_METHOD(Pogo_Runtime_Pool, __construct) {
+PHP_METHOD(Pogo_Internal_Pool, __construct) {
     char *entrypoint;
     size_t entry_len;
     zend_long min = 1;
@@ -489,7 +384,7 @@ PHP_METHOD(Pogo_Runtime_Pool, __construct) {
     }
 }
 
-PHP_METHOD(Pogo_Runtime_Pool, start) {
+PHP_METHOD(Pogo_Internal_Pool, start) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     long poolID = (long)intern->go_handle;
 
@@ -524,13 +419,13 @@ PHP_METHOD(Pogo_Runtime_Pool, start) {
     start_pool_wrapper(poolID, Z_STRVAL_P(entrypoint), (int)Z_STRLEN_P(entrypoint), Z_LVAL_P(min), Z_LVAL_P(max), Z_LVAL_P(max_jobs), shm_size, ipc_timeout_ms, scale_latency_ms, job_timeout_ms);
 }
 
-PHP_METHOD(Pogo_Runtime_Pool, shutdown) {
+PHP_METHOD(Pogo_Internal_Pool, shutdown) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     long poolID = (long)intern->go_handle;
     shutdown_pool_wrapper(poolID);
 }
 
-PHP_METHOD(Pogo_Runtime_Pool, submit) {
+PHP_METHOD(Pogo_Internal_Pool, submit) {
     char *class_name;
     size_t class_name_len;
     zval *args = NULL;
@@ -553,118 +448,85 @@ PHP_METHOD(Pogo_Runtime_Pool, submit) {
     object_init_ex(return_value, go_future_ce);
     pogo_object *intern_fut = pogo_object_from_obj(Z_OBJ_P(return_value));
     intern_fut->go_handle = ch_handle;
-    intern_fut->owns_handle = false;
-
-    zval channel_obj;
-    object_init_ex(&channel_obj, go_channel_ce);
-    pogo_object *intern_ch = pogo_object_from_obj(Z_OBJ(channel_obj));
-    intern_ch->go_handle = ch_handle;
-    intern_ch->owns_handle = true;
-    zend_update_property(go_future_ce, Z_OBJ_P(return_value), "channel", sizeof("channel")-1, &channel_obj);
-    zval_ptr_dtor(&channel_obj);
+    intern_fut->owns_handle = true; // FIX: Future owns the handle
 }
 
-// Added method to expose Pool ID
-PHP_METHOD(Pogo_Runtime_Pool, id) {
+PHP_METHOD(Pogo_Internal_Pool, id) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     RETURN_LONG((long)intern->go_handle);
 }
 
-PHP_METHOD(Pogo_WaitGroup, __construct) {
+PHP_METHOD(Pogo_Internal_WaitGroup, __construct) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     intern->go_handle = create_WaitGroup_object();
     intern->owns_handle = true;
 }
-PHP_METHOD(Pogo_WaitGroup, add) {
+PHP_METHOD(Pogo_Internal_WaitGroup, add) {
     zend_long delta = 1;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_LONG(delta) ZEND_PARSE_PARAMETERS_END();
     add_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, delta);
 }
-PHP_METHOD(Pogo_WaitGroup, done) {
+PHP_METHOD(Pogo_Internal_WaitGroup, done) {
     done_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
-PHP_METHOD(Pogo_WaitGroup, wait) {
+PHP_METHOD(Pogo_Internal_WaitGroup, wait) {
     wait_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
 
-PHP_METHOD(Pogo_Channel, __construct) {
+PHP_METHOD(Pogo_Internal_Channel, __construct) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     intern->go_handle = create_Channel_object();
     intern->owns_handle = true;
 }
-PHP_METHOD(Pogo_Channel, init) {
+PHP_METHOD(Pogo_Internal_Channel, init) {
     zend_long capacity = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_LONG(capacity) ZEND_PARSE_PARAMETERS_END();
     init_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, capacity);
 }
-PHP_METHOD(Pogo_Channel, push) {
+PHP_METHOD(Pogo_Internal_Channel, push) {
     char *val; size_t val_len;
     ZEND_PARSE_PARAMETERS_START(1, 1) Z_PARAM_STRING(val, val_len) ZEND_PARSE_PARAMETERS_END();
     push_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle, val, (int)val_len);
 }
-PHP_METHOD(Pogo_Channel, pop) {
+PHP_METHOD(Pogo_Internal_Channel, pop) {
     char *res = pop_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
     if (res) { RETVAL_STRING(res); free(res); } else { RETURN_EMPTY_STRING(); }
 }
-PHP_METHOD(Pogo_Channel, close) {
+PHP_METHOD(Pogo_Internal_Channel, close) {
     close_wrapper(pogo_object_from_obj(Z_OBJ_P(ZEND_THIS))->go_handle);
 }
 
-PHP_METHOD(Pogo_Future, __construct) {}
-PHP_METHOD(Pogo_Future, await) {
+PHP_METHOD(Pogo_Internal_Future, __construct) {}
+PHP_METHOD(Pogo_Internal_Future, await) {
     double timeout = -1.0;
     ZEND_PARSE_PARAMETERS_START(0, 1) Z_PARAM_OPTIONAL Z_PARAM_DOUBLE(timeout) ZEND_PARSE_PARAMETERS_END();
 
-    zval *resolved = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "resolved", sizeof("resolved")-1, 1, NULL);
-    if (resolved && Z_TYPE_P(resolved) == IS_TRUE) {
-        zval *error = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "error", sizeof("error")-1, 1, NULL);
-        if (error && Z_TYPE_P(error) == IS_STRING) {
-            zend_throw_exception(go_worker_exception_ce, Z_STRVAL_P(error), 0);
-            RETURN_THROWS();
-        }
-        zval *res = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "result", sizeof("result")-1, 1, NULL);
-        RETURN_ZVAL(res, 1, 0);
+    pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
+    if (intern->go_handle == 0) {
+        RETURN_NULL();
     }
 
-    zval *ch_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "channel", sizeof("channel")-1, 1, NULL);
-    if (!ch_prop || Z_TYPE_P(ch_prop) != IS_OBJECT) {
-        zend_throw_exception(go_worker_exception_ce, "Future not initialized", 0);
-        RETURN_THROWS();
-    }
-
-    char *res = await_wrapper(pogo_object_from_obj(Z_OBJ_P(ch_prop))->go_handle, timeout);
+    char *res = await_wrapper(intern->go_handle, timeout);
     if (res == NULL) {
-        zend_throw_exception(go_timeout_exception_ce, "Future::await() timed out", 0);
-        RETURN_THROWS();
+        RETURN_NULL();
     }
 
-    if (internal_process_result(ZEND_THIS, res) == FAILURE) {
-        RETURN_THROWS();
-    }
-    zval *res_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "result", sizeof("result")-1, 1, NULL);
-    RETURN_ZVAL(res_prop, 1, 0);
+    RETVAL_STRING(res);
+    free(res);
 }
-PHP_METHOD(Pogo_Future, done) {
-    zval *resolved = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "resolved", sizeof("resolved")-1, 1, NULL);
-    if (resolved && Z_TYPE_P(resolved) == IS_TRUE) RETURN_TRUE;
+PHP_METHOD(Pogo_Internal_Future, done) {
+    pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
+    if (intern->go_handle == 0) RETURN_FALSE;
 
-    zval *ch_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "channel", sizeof("channel")-1, 1, NULL);
-    if (!ch_prop || Z_TYPE_P(ch_prop) != IS_OBJECT) RETURN_FALSE;
-
-    char *res = poll_wrapper(pogo_object_from_obj(Z_OBJ_P(ch_prop))->go_handle);
+    char *res = poll_wrapper(intern->go_handle);
     if (res == NULL) RETURN_FALSE;
-
-    if (internal_process_result(ZEND_THIS, res) == FAILURE) RETURN_THROWS();
+    
     RETURN_TRUE;
 }
-PHP_METHOD(Pogo_Future, cancel) {
-    zval *ch_prop = zend_read_property(go_future_ce, Z_OBJ_P(ZEND_THIS), "channel", sizeof("channel")-1, 1, NULL);
-    if (!ch_prop || Z_TYPE_P(ch_prop) != IS_OBJECT) RETURN_FALSE;
-
-    uintptr_t h = pogo_object_from_obj(Z_OBJ_P(ch_prop))->go_handle;
-    if (h == 0) RETURN_FALSE;
-
-    RETURN_BOOL(cancel_wrapper(h));
+PHP_METHOD(Pogo_Internal_Future, cancel) {
+    pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
+    if (intern->go_handle == 0) RETURN_FALSE;
+    RETURN_BOOL(cancel_wrapper(intern->go_handle));
 }
 
 PHP_MSHUTDOWN_FUNCTION(pogo)
@@ -680,17 +542,17 @@ PHP_MINIT_FUNCTION(pogo)
     pogo_handlers.free_obj = pogo_free_object;
     pogo_handlers.offset = offsetof(pogo_object, std);
 
-    go_future_ce = register_class_Pogo_Future();
+    go_future_ce = register_class_Pogo_Internal_Future();
     go_future_ce->create_object = pogo_create_object;
 
-    go_channel_ce = register_class_Pogo_Channel();
+    go_channel_ce = register_class_Pogo_Internal_Channel();
     go_channel_ce->create_object = pogo_create_object;
 
-    go_waitgroup_ce = register_class_Pogo_WaitGroup();
+    go_waitgroup_ce = register_class_Pogo_Internal_WaitGroup();
     go_waitgroup_ce->create_object = pogo_create_object;
 
     zend_class_entry ce_pool;
-    INIT_CLASS_ENTRY(ce_pool, "Pogo\\Runtime\\Pool", class_Pogo_Runtime_Pool_methods);
+    INIT_CLASS_ENTRY(ce_pool, "Pogo\\Internal\\Pool", class_Pogo_Internal_Pool_methods);
     go_pool_ce = zend_register_internal_class(&ce_pool);
     go_pool_ce->create_object = pogo_create_object;
     zend_declare_property_string(go_pool_ce, "entrypoint", sizeof("entrypoint")-1, "", ZEND_ACC_PRIVATE);

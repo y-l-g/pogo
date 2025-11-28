@@ -7,6 +7,8 @@ import (
 )
 
 const (
+	ProtocolVersion = 1
+
 	PktTypeData     = 0x00
 	PktTypeError    = 0x01
 	PktTypeFatal    = 0x02
@@ -34,6 +36,8 @@ namespace Pogo\Runtime;
 
 interface ProtocolConstants
 {
+    public const PROTOCOL_VERSION = %d;
+
     public const TYPE_DATA = 0x%02X;
     public const TYPE_ERROR = 0x%02X;
     public const TYPE_FATAL = 0x%02X;
@@ -41,7 +45,7 @@ interface ProtocolConstants
     public const TYPE_SHM = 0x%02X;
     public const TYPE_SHUTDOWN = 0x%02X;
 }
-`, PktTypeData, PktTypeError, PktTypeFatal, PktTypeHello, PktTypeShm, PktTypeShutdown)
+`, ProtocolVersion, PktTypeData, PktTypeError, PktTypeFatal, PktTypeHello, PktTypeShm, PktTypeShutdown)
 
 	path := filepath.Join("lib", "Runtime", "ProtocolConstants.php")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -54,6 +58,8 @@ func generateC() error {
 	content := fmt.Sprintf(`#ifndef POGO_CONSTS_H
 #define POGO_CONSTS_H
 
+#define PROTOCOL_VERSION  %d
+
 #define PKT_TYPE_DATA     0x%02X
 #define PKT_TYPE_ERROR    0x%02X
 #define PKT_TYPE_FATAL    0x%02X
@@ -62,7 +68,7 @@ func generateC() error {
 #define PKT_TYPE_SHUTDOWN 0x%02X
 
 #endif
-`, PktTypeData, PktTypeError, PktTypeFatal, PktTypeHello, PktTypeShm, PktTypeShutdown)
+`, ProtocolVersion, PktTypeData, PktTypeError, PktTypeFatal, PktTypeHello, PktTypeShm, PktTypeShutdown)
 
 	return os.WriteFile("pogo_consts.h", []byte(content), 0644)
 }

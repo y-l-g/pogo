@@ -3,6 +3,8 @@ package supervisor
 //go:generate go run ../../cmd/genproto/main.go
 
 const (
+	ProtocolVersion = 1
+
 	PktTypeData     = 0x00
 	PktTypeError    = 0x01
 	PktTypeFatal    = 0x02

@@ -33,8 +33,9 @@ type phpWorker struct {
 	dead          atomic.Bool
 	jobsProcessed int32
 
-	// Atomic timestamp (Unix Nano)
-	lastActiveUnixNano int64
+	// Protected by mu
+	mu         sync.Mutex
+	lastActive time.Time
 
 	useMsgPack bool
 	useShm     bool
@@ -42,13 +43,21 @@ type phpWorker struct {
 
 // Helper to safely get lastActive
 func (w *phpWorker) getLastActive() time.Time {
-	nanos := atomic.LoadInt64(&w.lastActiveUnixNano)
-	return time.Unix(0, nanos)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastActive
 }
 
 // Helper to safely set lastActive
 func (w *phpWorker) setLastActive(t time.Time) {
-	atomic.StoreInt64(&w.lastActiveUnixNano, t.UnixNano())
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.lastActive = t
+}
+
+type TestHooks struct {
+	WorkerStarted chan int
+	WorkerKilled  chan int
 }
 
 type PoolConfig struct {
@@ -724,10 +733,10 @@ func (p *Pool) spawnWorkerRoutine() {
 	}
 
 	worker := &phpWorker{
-		id:                 id,
-		transport:          NewTransport(process.ParentRead, process.ParentWrite),
-		process:            process,
-		lastActiveUnixNano: time.Now().UnixNano(), // Initial Value
+		id:         id,
+		transport:  NewTransport(process.ParentRead, process.ParentWrite),
+		process:    process,
+		lastActive: time.Now(),
 	}
 
 	// 3. Register Worker
@@ -843,9 +852,10 @@ func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
 
 func (p *Pool) performHandshake(w *phpWorker) error {
 	hello := map[string]any{
-		"version":       "2.3",
-		"pool_id":       p.ID,
-		"shm_available": (p.shm != nil),
+		"version":          "2.3",
+		"protocol_version": ProtocolVersion,
+		"pool_id":          p.ID,
+		"shm_available":    (p.shm != nil),
 	}
 	data, _ := json.Marshal(hello)
 
@@ -876,6 +886,8 @@ func (p *Pool) performHandshake(w *phpWorker) error {
 	if err := json.Unmarshal(body, &ack); err != nil {
 		return err
 	}
+
+	// Optional: Check ack["protocol_version"] here if we want strict bidirectional check
 
 	if caps, ok := ack["capabilities"].(map[string]any); ok {
 		if proto, ok := caps["protocol"].(string); ok && proto == "msgpack" {

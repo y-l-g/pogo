@@ -6,6 +6,8 @@ namespace Pogo\Runtime;
 
 interface ProtocolConstants
 {
+    public const PROTOCOL_VERSION = 1;
+
     public const TYPE_DATA = 0x00;
     public const TYPE_ERROR = 0x01;
     public const TYPE_FATAL = 0x02;

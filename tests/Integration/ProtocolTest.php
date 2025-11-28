@@ -19,7 +19,7 @@ class ProtocolTest extends TestCase
 
     public function testSharedMemoryAccess(): void
     {
-        if (!function_exists('Pogo\_shm_read')) {
+        if (!function_exists('Pogo\Internal\_shm_read')) {
             $this->markTestSkipped('Extension missing SHM functions');
         }
 
@@ -83,6 +83,7 @@ class ProtocolTest extends TestCase
         // 2. Prepare "Hello" Packet (Type 0x03)
         $payload = json_encode([
             'version' => '2.3',
+            'protocol_version' => Protocol::PROTOCOL_VERSION, // Match constant
             'pool_id' => 1,
             'shm_available' => false,
         ]);
@@ -126,6 +127,7 @@ class ProtocolTest extends TestCase
         $json = json_decode($body, true);
 
         $this->assertEquals('HELLO_ACK', $json['type'] ?? '');
+        $this->assertEquals(Protocol::PROTOCOL_VERSION, $json['protocol_version'] ?? 0);
         $this->assertArrayHasKey('capabilities', $json);
 
         // Cleanup

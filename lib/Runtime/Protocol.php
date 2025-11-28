@@ -46,14 +46,12 @@ class Protocol implements ProtocolConstants
             });
 
             try {
-                // PHPStan Fix: Assign to temp var first to avoid assigning 'false' to property
                 $in = fopen("php://fd/$envIn", 'rb');
                 $out = fopen("php://fd/$envOut", 'wb');
             } finally {
                 restore_error_handler();
             }
 
-            // PHPStan: Validate resources explicitly before assignment
             if (!is_resource($in) || !is_resource($out)) {
                 throw new IOException("Failed to open explicit IPC FDs ($envIn, $envOut)");
             }
@@ -102,7 +100,6 @@ class Protocol implements ProtocolConstants
                 $jobClass = $task['job_class'] ?? null;
                 $payload = $task['payload'] ?? [];
 
-                // PHPStan Fix: Validate $jobClass is a string before checking class existence
                 if (is_string($jobClass) && class_exists($jobClass)) {
                     $job = new $jobClass();
 
@@ -113,7 +110,6 @@ class Protocol implements ProtocolConstants
                     }
                 }
 
-                // PHPStan Fix: Ensure we don't concatenate mixed types
                 $safeJobName = is_string($jobClass) ? $jobClass : 'unknown';
                 $this->error("Protocol::run() could not execute job: " . $safeJobName);
 
@@ -156,6 +152,15 @@ class Protocol implements ProtocolConstants
 
         /** @var array<string, mixed> $helloData */
         $helloData = json_decode($body, true) ?: [];
+
+        // Version Check
+        $remoteVer = $helloData['protocol_version'] ?? 0;
+        if ($remoteVer !== self::PROTOCOL_VERSION) {
+            // Deciding policy: Strict match? Or >= ?
+            // For now strict.
+            throw new IOException("Protocol Version Mismatch: Host=$remoteVer, Worker=" . self::PROTOCOL_VERSION);
+        }
+
         $this->handleHello($helloData);
     }
 
@@ -214,6 +219,14 @@ class Protocol implements ProtocolConstants
             if ($type === self::TYPE_HELLO) {
                 /** @var array<string, mixed> $helloData */
                 $helloData = json_decode($body, true) ?: [];
+
+                // Re-handshake? Should we check version again?
+                // Probably yes.
+                $remoteVer = $helloData['protocol_version'] ?? 0;
+                if ($remoteVer !== self::PROTOCOL_VERSION) {
+                    throw new IOException("Protocol Version Mismatch (Re-Hello): Host=$remoteVer, Worker=" . self::PROTOCOL_VERSION);
+                }
+
                 $this->handleHello($helloData);
                 return $this->read($timeoutSeconds);
             }
@@ -229,9 +242,10 @@ class Protocol implements ProtocolConstants
                 /** @var array{offset: int, length: int} $shmParts */
                 $length = $shmParts['length'];
 
-                if (!$this->useMsgPack && function_exists('Pogo\_shm_decode')) {
+                // Updated to use Pogo\Internal namespace
+                if (!$this->useMsgPack && function_exists('Pogo\Internal\_shm_decode')) {
                     /** @var mixed */
-                    $shmResult = \Pogo\_shm_decode($this->shmFd, $offset, $length);
+                    $shmResult = \Pogo\Internal\_shm_decode($this->shmFd, $offset, $length);
                     if (!is_array($shmResult)) {
                         throw new IOException("SHM Decode failed: expected array");
                     }
@@ -239,9 +253,9 @@ class Protocol implements ProtocolConstants
                     return $shmResult;
                 }
 
-                if (function_exists('Pogo\_shm_read')) {
+                if (function_exists('Pogo\Internal\_shm_read')) {
                     /** @var string */
-                    $realBody = \Pogo\_shm_read($this->shmFd, $offset, $length);
+                    $realBody = \Pogo\Internal\_shm_read($this->shmFd, $offset, $length);
                     $decoded = $this->decode($realBody);
                     if (!is_array($decoded)) {
                         throw new IOException("SHM Read decode failed: expected array");
@@ -270,13 +284,16 @@ class Protocol implements ProtocolConstants
     private function handleHello(array $hello): void
     {
         $canMsgPack = extension_loaded('msgpack');
+
+        // Updated to use Pogo\Internal namespace
         $shmAvailable = ($hello['shm_available'] ?? false)
             && ($this->shmFd !== -1)
-            && function_exists('Pogo\_shm_check')
-            && \Pogo\_shm_check($this->shmFd);
+            && function_exists('Pogo\Internal\_shm_check')
+            && \Pogo\Internal\_shm_check($this->shmFd);
 
         $ack = [
             'type' => 'HELLO_ACK',
+            'protocol_version' => self::PROTOCOL_VERSION, // Send back version
             'pid' => getmypid(),
             'capabilities' => [
                 'protocol' => $canMsgPack ? 'msgpack' : 'json',
@@ -404,8 +421,6 @@ class Protocol implements ProtocolConstants
         $bytesRead = 0;
 
         while ($bytesRead < $n) {
-            // PHPStan Fix: fread expects int<1, max>.
-            // We must ensure the requested length is strictly positive.
             $remaining = $n - $bytesRead;
             if ($remaining <= 0) {
                 break;

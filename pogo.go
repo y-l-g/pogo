@@ -60,9 +60,9 @@ var (
 	logChan     = make(chan string, 100) // Buffered channel for non-blocking logging
 	logOnce     sync.Once
 
-	poolRegistry  sync.Map // map[int64]*supervisor.Pool
-	poolIDCounter int64
-	defaultPool   *supervisor.Pool // ID 0
+	// Global Manager instance
+	manager     *supervisor.Manager
+	defaultPool *supervisor.Pool // Reference to Pool ID 0 for easy access
 
 	// Build Metadata (Injected via -ldflags)
 	Version = "dev"
@@ -116,18 +116,17 @@ func _gopogo_init(fn C.uintptr_t) {
 
 func init() {
 	frankenphp.RegisterExtension(unsafe.Pointer(&C.pogo_module_entry))
+	manager = supervisor.NewManager()
+
+	// Create default pool (ID 0)
 	defaultPool = supervisor.NewPool(0)
-	poolRegistry.Store(int64(0), defaultPool)
+	manager.RegisterPool(defaultPool)
 }
 
 //export Pogo_shutdown_module
 func Pogo_shutdown_module() {
 	log.Println("Shutting down pogo module...")
-	poolRegistry.Range(func(key, value any) bool {
-		p := value.(*supervisor.Pool)
-		p.Shutdown()
-		return true
-	})
+	manager.Shutdown()
 }
 
 //export Pogo_version
@@ -136,39 +135,20 @@ func Pogo_version() *C.char {
 	return C.CString(v)
 }
 
-func RegisterPool(p *supervisor.Pool) int64 {
-	id := atomic.AddInt64(&poolIDCounter, 1)
-	p.ID = id
-	poolRegistry.Store(id, p)
-	return id
-}
-
-func GetPool(id int64) *supervisor.Pool {
-	if val, ok := poolRegistry.Load(id); ok {
-		return val.(*supervisor.Pool)
-	}
-	return nil
-}
-
-func RemovePool(id int64) {
-	if val, ok := poolRegistry.LoadAndDelete(id); ok {
-		p := val.(*supervisor.Pool)
-		p.Shutdown()
-	}
-}
-
 //export create_pool_wrapper
 func create_pool_wrapper() C.long {
-	p := supervisor.NewPool(-1)
-	return C.long(RegisterPool(p))
+	p := manager.CreatePool()
+	return C.long(p.ID)
 }
 
 //export start_pool_wrapper
 func start_pool_wrapper(poolID C.long, entrypoint *C.char, entryLen C.int, minWorkers C.long, maxWorkers C.long, maxJobs C.long, shmSize C.long, ipcTimeoutMs C.long, scaleLatencyMs C.long, jobTimeoutMs C.long) {
-	p := GetPool(int64(poolID))
+	p := manager.GetPool(int64(poolID))
+
 	if p == nil {
 		return
 	}
+
 	ep := C.GoStringN(entrypoint, entryLen)
 	cfg := supervisor.PoolConfig{
 		ShmSize:      int64(shmSize),
@@ -181,7 +161,8 @@ func start_pool_wrapper(poolID C.long, entrypoint *C.char, entryLen C.int, minWo
 
 //export shutdown_pool_wrapper
 func shutdown_pool_wrapper(poolID C.long) {
-	RemovePool(int64(poolID))
+	// We don't typically delete the default pool via this method, but if called, manager handles it.
+	manager.RemovePool(int64(poolID))
 }
 
 //export dispatch_wrapper
@@ -191,7 +172,8 @@ func dispatch_wrapper(name *C.char, nameLen C.int, payload unsafe.Pointer) {
 
 //export dispatch_to_pool_wrapper
 func dispatch_to_pool_wrapper(poolID C.long, name *C.char, nameLen C.int, payload unsafe.Pointer) {
-	p := GetPool(int64(poolID))
+	p := manager.GetPool(int64(poolID))
+
 	if p == nil || p.Context().Err() != nil {
 		return
 	}
@@ -224,7 +206,8 @@ func async_wrapper(jobClass *C.char, jobClassLen C.int, args unsafe.Pointer) C.u
 
 //export async_on_pool_wrapper
 func async_on_pool_wrapper(poolID C.long, jobClass *C.char, jobClassLen C.int, args unsafe.Pointer) C.uintptr_t {
-	p := GetPool(int64(poolID))
+	p := manager.GetPool(int64(poolID))
+
 	if p == nil || p.Context().Err() != nil {
 		return 0
 	}
@@ -274,6 +257,7 @@ func start_workers_wrapper(entrypoint *C.char, entryLen C.int, minWorkers C.long
 
 //export dispatch_task_wrapper
 func dispatch_task_wrapper(taskName *C.char, taskNameLen C.int, args unsafe.Pointer) C.uintptr_t {
+	// Dispatch task always targets default pool
 	p := defaultPool
 	if p == nil || p.Context().Err() != nil {
 		return 0
@@ -316,19 +300,13 @@ func dispatch_task_wrapper(taskName *C.char, taskNameLen C.int, args unsafe.Poin
 
 //export cancel_wrapper
 func cancel_wrapper(chHandle C.uintptr_t) C.bool {
-	// defaultPool might check its own cancellations
-	if val, ok := defaultPool.LoadCancellation(uintptr(chHandle)); ok {
-		return C.bool(!val.Swap(true))
-	}
-
 	found := false
-	poolRegistry.Range(func(key, value any) bool {
-		p := value.(*supervisor.Pool)
+	manager.Range(func(p *supervisor.Pool) bool {
 		if val, ok := p.LoadCancellation(uintptr(chHandle)); ok {
 			found = !val.Swap(true)
-			return false
+			return false // Stop iteration, found it
 		}
-		return true
+		return true // Continue
 	})
 
 	return C.bool(found)
@@ -479,7 +457,8 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 
 //export get_pool_stats_wrapper
 func get_pool_stats_wrapper(poolID C.long) *C.char {
-	p := GetPool(int64(poolID))
+	p := manager.GetPool(int64(poolID))
+
 	if p == nil {
 		return C.CString("{}")
 	}
@@ -509,7 +488,7 @@ func removeGoObject(handle C.uintptr_t) {
 		}
 
 		if poolID != -1 {
-			p := GetPool(poolID)
+			p := manager.GetPool(poolID)
 			if p != nil {
 				p.DeleteCancellation(h)
 			}

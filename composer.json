@@ -7,18 +7,13 @@
     "psr-4": {
       "Pogo\\": "lib/"
     },
-    "files": [
-      "stubs/Pogo.php"
-    ]
+    "files": ["lib/functions.php"]
   },
   "autoload-dev": {
     "psr-4": {
       "Tests\\": "tests/"
     },
-    "classmap": [
-      "tests/Jobs/",
-      "tests/Mocks/"
-    ]
+    "classmap": ["tests/Jobs/", "tests/Mocks/"]
   },
   "authors": [
     {

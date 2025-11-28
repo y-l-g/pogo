@@ -1,6 +1,8 @@
 #ifndef POGO_CONSTS_H
 #define POGO_CONSTS_H
 
+#define PROTOCOL_VERSION  1
+
 #define PKT_TYPE_DATA     0x00
 #define PKT_TYPE_ERROR    0x01
 #define PKT_TYPE_FATAL    0x02
