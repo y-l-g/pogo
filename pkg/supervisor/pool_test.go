@@ -6,6 +6,33 @@ import (
 	"time"
 )
 
+// TestObserver captures events for verification in tests.
+type TestObserver struct {
+	WorkerStarted chan int
+	WorkerExited  chan int
+}
+
+func NewTestObserver() *TestObserver {
+	return &TestObserver{
+		WorkerStarted: make(chan int, 100),
+		WorkerExited:  make(chan int, 100),
+	}
+}
+
+func (o *TestObserver) OnWorkerStart(workerID int) {
+	select {
+	case o.WorkerStarted <- workerID:
+	default:
+	}
+}
+
+func (o *TestObserver) OnWorkerExit(workerID int) {
+	select {
+	case o.WorkerExited <- workerID:
+	default:
+	}
+}
+
 func setEnvOrFatal(t *testing.T, key, value string) {
 	if err := os.Setenv(key, value); err != nil {
 		t.Fatalf("Failed to set env var %s: %v", key, err)
@@ -44,18 +71,13 @@ func TestCrashResilience(t *testing.T) {
 		p.Shutdown()
 	}()
 
-	workerKilled := make(chan int, 10)
-	// Note: We don't monitor WorkerStarted here because crash_immediate might crash
-	// before the handshake completes, meaning spawnWorker returns nil and doesn't
-	// fire WorkerStarted. However, WorkerKilled MUST fire when cmd.Wait() returns.
+	observer := NewTestObserver()
 
 	cfg := PoolConfig{
 		ShmSize:      1024 * 1024,
 		IpcTimeout:   100 * time.Millisecond,
 		ScaleLatency: 50,
-		TestHooks: &TestHooks{
-			WorkerKilled: workerKilled,
-		},
+		Observer:     observer,
 	}
 
 	t.Log("Starting Pool with Mock Worker (Crash Mode)...")
@@ -63,7 +85,7 @@ func TestCrashResilience(t *testing.T) {
 
 	// Wait for the first worker to die
 	select {
-	case id := <-workerKilled:
+	case id := <-observer.WorkerExited:
 		t.Logf("Worker #%d died as expected.", id)
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for initial worker crash")
@@ -72,7 +94,7 @@ func TestCrashResilience(t *testing.T) {
 	// The supervisor should try to respawn.
 	// Wait for the second worker to die (proving the loop is active)
 	select {
-	case id := <-workerKilled:
+	case id := <-observer.WorkerExited:
 		t.Logf("Replacement Worker #%d died as expected.", id)
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for replacement worker crash")
@@ -102,22 +124,20 @@ func TestNormalOperation(t *testing.T) {
 	p := NewPool(1000)
 	defer p.Shutdown()
 
-	workerStarted := make(chan int, 1)
+	observer := NewTestObserver()
 
 	cfg := PoolConfig{
 		ShmSize:      1024 * 1024,
 		IpcTimeout:   2000 * time.Millisecond,
 		ScaleLatency: 50,
-		TestHooks: &TestHooks{
-			WorkerStarted: workerStarted,
-		},
+		Observer:     observer,
 	}
 
 	p.Start("-test.run=TestHelperProcess", 1, 1, 0, cfg)
 
-	// Wait for boot via channel instead of sleep
+	// Wait for boot via observer instead of sleep
 	select {
-	case id := <-workerStarted:
+	case id := <-observer.WorkerStarted:
 		t.Logf("Worker #%d started successfully.", id)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for worker start")

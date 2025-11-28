@@ -33,9 +33,8 @@ type phpWorker struct {
 	dead          atomic.Bool
 	jobsProcessed int32
 
-	// Protected by mu
-	mu         sync.Mutex
-	lastActive time.Time
+	// Atomic timestamp (Unix Nano)
+	lastActiveUnixNano int64
 
 	useMsgPack bool
 	useShm     bool
@@ -43,21 +42,13 @@ type phpWorker struct {
 
 // Helper to safely get lastActive
 func (w *phpWorker) getLastActive() time.Time {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.lastActive
+	nanos := atomic.LoadInt64(&w.lastActiveUnixNano)
+	return time.Unix(0, nanos)
 }
 
 // Helper to safely set lastActive
 func (w *phpWorker) setLastActive(t time.Time) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.lastActive = t
-}
-
-type TestHooks struct {
-	WorkerStarted chan int
-	WorkerKilled  chan int
+	atomic.StoreInt64(&w.lastActiveUnixNano, t.UnixNano())
 }
 
 type PoolConfig struct {
@@ -65,7 +56,7 @@ type PoolConfig struct {
 	IpcTimeout   time.Duration
 	JobTimeout   time.Duration
 	ScaleLatency int64
-	TestHooks    *TestHooks
+	Observer     PoolObserver
 }
 
 type Pool struct {
@@ -101,7 +92,8 @@ type Pool struct {
 	mpHandle codec.MsgpackHandle
 	config   PoolConfig
 
-	spawnWg sync.WaitGroup // Waits for spawn routines to finish
+	spawnWg  sync.WaitGroup // Waits for spawn routines to finish
+	observer PoolObserver   // Lifecycle observer
 }
 
 func NewPool(id int64) *Pool {
@@ -235,6 +227,12 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 		p.maxWorkers = int32(max)
 		p.maxJobs = int32(maxJobs)
 		p.config = cfg
+
+		if p.config.Observer == nil {
+			p.observer = &NoOpObserver{}
+		} else {
+			p.observer = p.config.Observer
+		}
 
 		p.scaler = NewAutoScaler(p.config.ScaleLatency)
 
@@ -726,10 +724,10 @@ func (p *Pool) spawnWorkerRoutine() {
 	}
 
 	worker := &phpWorker{
-		id:         id,
-		transport:  NewTransport(process.ParentRead, process.ParentWrite),
-		process:    process,
-		lastActive: time.Now(),
+		id:                 id,
+		transport:          NewTransport(process.ParentRead, process.ParentWrite),
+		process:            process,
+		lastActiveUnixNano: time.Now().UnixNano(), // Initial Value
 	}
 
 	// 3. Register Worker
@@ -769,23 +767,14 @@ func (p *Pool) spawnWorkerRoutine() {
 
 		MetricWorkerKill(p.ID)
 
-		// ADDED: Trigger hook to satisfy TestCrashResilience
-		if p.config.TestHooks != nil && p.config.TestHooks.WorkerKilled != nil {
-			select {
-			case p.config.TestHooks.WorkerKilled <- worker.id:
-			default:
-			}
-		}
+		// Call Observer
+		p.observer.OnWorkerExit(worker.id)
 
 		return // defer releases semaphore
 	}
 
-	if p.config.TestHooks != nil && p.config.TestHooks.WorkerStarted != nil {
-		select {
-		case p.config.TestHooks.WorkerStarted <- worker.id:
-		default:
-		}
-	}
+	// Call Observer
+	p.observer.OnWorkerStart(worker.id)
 
 	// 6. Push to Available Workers
 	p.workers <- worker
@@ -797,12 +786,8 @@ func (p *Pool) spawnWorkerRoutine() {
 	// 8. Cleanup
 	MetricWorkerKill(p.ID)
 
-	if p.config.TestHooks != nil && p.config.TestHooks.WorkerKilled != nil {
-		select {
-		case p.config.TestHooks.WorkerKilled <- worker.id:
-		default:
-		}
-	}
+	// Call Observer
+	p.observer.OnWorkerExit(worker.id)
 
 	p.workersListMu.Lock()
 	delete(p.workersList, id)

@@ -1,4 +1,4 @@
-# FrankenPHP Pogo (PHP Over Go)
+# Pogo (PHP Over Go)
 
 The **FrankenPHP Pogo Extension** is a high-performance, systems-level library designed to introduce **True Parallelism**, **Go-native Concurrency Primitives**, and **OS-Level Process Management** into the PHP ecosystem.
 
