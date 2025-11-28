@@ -510,5 +510,4 @@ Every message corresponds to a **5-Byte Header** followed by a **Variable Body**
 ### Known Limitations
 
 1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and Pogo channels can be passed.
-2. **Windows Process Management:** Primary support targets Linux/MacOS. Windows support exists but process lifecycle management differs.
-3. **Ring Buffer Tail Padding:** The strict FIFO nature requires wrapping back to the start when a payload hits the end of the buffer. Unused tail bytes are tracked as `shm_fragmentation_bytes`.
+2. **Ring Buffer Tail Padding:** The strict FIFO nature requires wrapping back to the start when a payload hits the end of the buffer. Unused tail bytes are tracked as `shm_fragmentation_bytes`.
