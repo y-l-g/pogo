@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Pogo;
 
 use Pogo\Internal\Future as InternalFuture;
@@ -19,27 +21,24 @@ class Future
     public function await(?float $timeout = null): mixed
     {
         if ($this->resolved) {
-            if ($this->error) {
+            if ($this->error !== null) {
                 throw new WorkerException($this->error);
             }
             return $this->result;
         }
 
-        // Fix: Pass -1.0 explicitly if timeout is null to signal infinite wait to C layer.
-        // Passing null to Z_PARAM_DOUBLE converts to 0.0 (non-blocking).
         $raw = $this->handle->await($timeout ?? -1.0);
 
         if ($raw === null) {
             if ($timeout !== null) {
                 throw new TimeoutException("Future::await() timed out");
             }
-            // Should not happen for infinite timeout (-1.0) unless channel is fundamentally broken
             return null;
         }
 
         $this->processResult($raw);
 
-        if ($this->error) {
+        if ($this->error !== null) {
             throw new WorkerException($this->error);
         }
 
@@ -73,6 +72,7 @@ class Future
 
     private function processResult(string $raw): void
     {
+        /** @var array<string, mixed>|null $data */
         $data = json_decode($raw, true);
 
         if (!is_array($data)) {
@@ -82,10 +82,15 @@ class Future
         }
 
         if (isset($data['status']) && $data['status'] === 'error') {
-            $msg = $data['message'] ?? 'Unknown worker error';
-            if (isset($data['trace'])) {
-                $msg .= "\n--- Remote Trace ---\n" . $data['trace'];
+            // Force string conversion cleanly
+            $msg = isset($data['message']) && is_scalar($data['message'])
+                ? (string) $data['message']
+                : 'Unknown worker error';
+
+            if (isset($data['trace']) && is_scalar($data['trace'])) {
+                $msg .= "\n--- Remote Trace ---\n" . (string) $data['trace'];
             }
+
             $this->error = $msg;
             $this->resolved = true;
             return;

@@ -754,14 +754,13 @@ func (p *Pool) spawnWorkerRoutine() {
 
 	// 4. Start Process
 	if err := process.Start(); err != nil {
-		worker.transport.Close()
+		_ = worker.transport.Close()
 		process.Close()
 		p.workersListMu.Lock()
 		delete(p.workersList, id)
 		p.workersListMu.Unlock()
 		return // defer releases semaphore
 	}
-
 	MetricWorkerSpawn(p.ID)
 
 	// 5. Handshake

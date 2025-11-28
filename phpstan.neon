@@ -3,4 +3,4 @@ parameters:
     paths:
         - lib
     scanFiles:
-        - stubs/Pogo.php
+        - pogo.stub.php

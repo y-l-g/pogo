@@ -84,7 +84,6 @@ class Protocol implements ProtocolConstants
             try {
                 $task = $this->read();
             } catch (IOException $e) {
-                // Critical Transport Failure (Host gone, Pipe broke)
                 fwrite($this->err, "[Worker Shutdown] Transport lost: " . $e->getMessage() . "\n");
                 exit(0);
             } catch (Throwable $e) {
@@ -93,11 +92,13 @@ class Protocol implements ProtocolConstants
             }
 
             if ($task === null) {
-                break; // Shutdown signal received
+                break;
             }
 
             try {
+                /** @var string|null $jobClass */
                 $jobClass = $task['job_class'] ?? null;
+                /** @var array<mixed> $payload */
                 $payload = $task['payload'] ?? [];
 
                 if (is_string($jobClass) && class_exists($jobClass)) {
@@ -153,12 +154,14 @@ class Protocol implements ProtocolConstants
         /** @var array<string, mixed> $helloData */
         $helloData = json_decode($body, true) ?: [];
 
-        // Version Check
         $remoteVer = $helloData['protocol_version'] ?? 0;
         if ($remoteVer !== self::PROTOCOL_VERSION) {
-            // Deciding policy: Strict match? Or >= ?
-            // For now strict.
-            throw new IOException("Protocol Version Mismatch: Host=$remoteVer, Worker=" . self::PROTOCOL_VERSION);
+            // Safe string conversion
+            throw new IOException(sprintf(
+                "Protocol Version Mismatch: Host=%s, Worker=%s",
+                is_scalar($remoteVer) ? (string) $remoteVer : '?',
+                self::PROTOCOL_VERSION
+            ));
         }
 
         $this->handleHello($helloData);
@@ -220,11 +223,13 @@ class Protocol implements ProtocolConstants
                 /** @var array<string, mixed> $helloData */
                 $helloData = json_decode($body, true) ?: [];
 
-                // Re-handshake? Should we check version again?
-                // Probably yes.
                 $remoteVer = $helloData['protocol_version'] ?? 0;
                 if ($remoteVer !== self::PROTOCOL_VERSION) {
-                    throw new IOException("Protocol Version Mismatch (Re-Hello): Host=$remoteVer, Worker=" . self::PROTOCOL_VERSION);
+                    throw new IOException(sprintf(
+                        "Protocol Version Mismatch (Re-Hello): Host=%s, Worker=%s",
+                        is_scalar($remoteVer) ? (string) $remoteVer : '?',
+                        self::PROTOCOL_VERSION
+                    ));
                 }
 
                 $this->handleHello($helloData);
@@ -242,7 +247,6 @@ class Protocol implements ProtocolConstants
                 /** @var array{offset: int, length: int} $shmParts */
                 $length = $shmParts['length'];
 
-                // Updated to use Pogo\Internal namespace
                 if (!$this->useMsgPack && function_exists('Pogo\Internal\_shm_decode')) {
                     /** @var mixed */
                     $shmResult = \Pogo\Internal\_shm_decode($this->shmFd, $offset, $length);
@@ -285,7 +289,6 @@ class Protocol implements ProtocolConstants
     {
         $canMsgPack = extension_loaded('msgpack');
 
-        // Updated to use Pogo\Internal namespace
         $shmAvailable = ($hello['shm_available'] ?? false)
             && ($this->shmFd !== -1)
             && function_exists('Pogo\Internal\_shm_check')
@@ -293,7 +296,7 @@ class Protocol implements ProtocolConstants
 
         $ack = [
             'type' => 'HELLO_ACK',
-            'protocol_version' => self::PROTOCOL_VERSION, // Send back version
+            'protocol_version' => self::PROTOCOL_VERSION,
             'pid' => getmypid(),
             'capabilities' => [
                 'protocol' => $canMsgPack ? 'msgpack' : 'json',
@@ -341,7 +344,6 @@ class Protocol implements ProtocolConstants
         try {
             $this->writePacket($payload, $packetType);
         } catch (IOException $e) {
-            // If we can't report the error, logging is all we can do.
             fwrite($this->err, "[Worker Error] Failed to report error to Host: " . $e->getMessage() . "\n");
         }
     }
@@ -426,7 +428,6 @@ class Protocol implements ProtocolConstants
                 break;
             }
 
-            // Optimistic Read
             $chunk = @fread($this->in, $remaining);
 
             if ($chunk === false) {
@@ -447,7 +448,6 @@ class Protocol implements ProtocolConstants
                 throw new IOException("Unexpected EOF (Truncated Packet)");
             }
 
-            // Wait for data
             $read = [$this->in];
             $write = null;
             $except = null;

@@ -409,8 +409,6 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 				log.Printf("[Pogo] Warning: select_wrapper fast path ignored non-Channel handle %d", h)
 				// Fallthrough to Slow Path
 			}
-		} else {
-			// Handle is 0. Fallthrough to Slow Path
 		}
 	}
 

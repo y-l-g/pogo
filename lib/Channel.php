@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Pogo;
 
 use Pogo\Internal\Channel as InternalChannel;
