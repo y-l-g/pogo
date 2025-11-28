@@ -1,15 +1,24 @@
 # Pogo (PHP Over Go)
 
-The **FrankenPHP Pogo Extension** is a high-performance, systems-level library designed to introduce **True Parallelism**, **Go-native Concurrency Primitives**, and **OS-Level Process Management** into the PHP ecosystem.
+The **Pogo Extension for FrankenPHP** is a high-performance, systems-level library designed to introduce **True Parallelism**, **Go-native Concurrency Primitives**, and **OS-Level Process Management** into the PHP ecosystem.
 
 Unlike PHP Fibers (which provide cooperative multitasking within a single thread) or standard Async PHP libraries (which rely on the user-land event loop), this extension leverages **Goroutines**, **OS Processes**, and **Memory-Mapped Shared Memory** to execute tasks simultaneously across multiple CPU cores with near-zero overhead.
 
 ## Table of Contents
 
 - [Introduction](#introduction)
+- [Installation & Setup](#installation--setup)
 - [Usage Examples](#usage-examples)
 - [API Reference](#api-reference)
+  - [Global Functions](#global-functions)
+  - [Classes](#classes)
+  - [Internal Functions (Advanced)](#internal-functions-advanced)
 - [Architecture & Tech Stack](#architecture--tech-stack)
+  - [The Supervisor & Process Manager](#layer-a-the-supervisor--process-manager)
+  - [The Manager & Registry](#layer-b-the-manager--registry)
+  - [The "Dumb" Bridge (CGO)](#layer-c-the-dumb-bridge-cgo)
+  - [The Protocol & Transport](#layer-d-the-protocol--transport)
+  - [Shared Memory (Ring Buffer)](#layer-e-shared-memory)
 - [Observability & Metrics](#observability--metrics)
 - [Performance Engineering](#performance-engineering)
 - [Quality Assurance & Testing](#quality-assurance--testing)
@@ -22,12 +31,13 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 
 ### Core Philosophy
 
-1. **The "OS" Pattern:** The Go Host acts as the Operating System/Supervisor. It manages memory, scheduling, IO, and process lifecycles. The PHP Workers act as User-Space applications; they focus solely on business logic.
-2. **Clean Separation:** Communication occurs over explicit IPC channels (Pipes) and Shared Memory segments. The architecture enforces a strict boundary where the Go runtime guarantees stability even if the PHP child process crashes or hangs.
+1. **The "OS" Pattern:** The Go Host acts as the Operating System/Supervisor. It manages memory, scheduling, I/O, and process lifecycles. The PHP Workers act as User-Space applications; they focus solely on business logic.
+2. **Clean Separation:** Communication occurs over explicit IPC channels (Pipes) and Shared Memory segments. The architecture enforces a strict boundary where the Go runtime guarantees stability even if the PHP child process crashes, hangs, or leaks memory.
 3. **Magic Marshalling:** Go primitives (Channels, WaitGroups) are exposed to PHP as objects. When passed between contexts, they are automatically marshalled into lightweight handles (`uintptr`), allowing PHP scripts to coordinate complex topologies without understanding the underlying Go memory pointers.
 4. **Hybrid Transport:**
    - **Small Payloads (<1KB):** Travel via standard Pipes (`php://fd/3`, `php://fd/4`) for ultra-low latency.
    - **Large Payloads (>1KB):** Transparently switch to **Shared Memory (Mmap)**. This version utilizes a **Map-Backed FIFO Ring Buffer** to bypass pipe buffer limitations and reduce syscall overhead, achieving throughputs exceeding 800 MB/s.
+5. **"Dumb C" Architecture:** To maximize stability, the C extension layer is kept intentionally thin. It performs no complex logic or data parsing. It simply acts as a conduit, passing raw bytes or handles between the PHP engine and the Go runtime. All serialization logic (JSON/MsgPack) resides in PHP userland or Go, mitigating the risk of segmentation faults common in complex C extensions.
 
 ---
 
@@ -71,11 +81,11 @@ class HelloWorldJob implements JobInterface
 <?php
 
 require __DIR__ . '/../vendor/autoload.php';
-
 require_once __DIR__ . '/HelloWorldJob.php';
 
 use Pogo\Runtime\Protocol;
 
+// Start the worker loop
 (new Protocol())->run();
 ```
 
@@ -87,7 +97,7 @@ use Pogo\Runtime\Protocol;
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/HelloWorldJob.php';
 
-// Start the Supervisor
+// Start the Supervisor (Idempotent)
 Pogo\start_worker_pool(__DIR__ . '/worker.php', 1, 1);
 
 // Dispatch
@@ -219,7 +229,7 @@ function start_worker_pool(
 ): void
 ```
 
-Initializes the background worker pool with configuration options. This function is idempotent but should typically be called once during the application boot phase (e.g., inside a worker script or index).
+Initializes the background worker pool with configuration options. This function is idempotent but should typically be called once during the application boot phase.
 
 **Parameters**
 
@@ -296,7 +306,7 @@ Returns real-time observability metrics from the Go Supervisor.
 
 **Returns**
 
-- `array` — Structure: `['active_workers' => int, 'total_workers' => int, 'peak_workers' => int, 'queue_depth' => int, 'map_size' => int, 'p95_wait_ms' => int, 'shm_total_bytes' => int, 'shm_used_bytes' => int]`.
+- `array` — Structure: `['active_workers', 'total_workers', 'peak_workers', 'queue_depth', 'map_size', 'p95_wait_ms', 'shm_total_bytes', 'shm_used_bytes', 'shm_fragmentation_bytes']`.
 
 #### `Pogo\version`
 
@@ -305,32 +315,6 @@ function version(): string
 ```
 
 Returns the extension version and build commit hash (e.g., `v1.2.3 (abcdef)`). Useful for diagnostics and logging.
-
-### Internal Functions (Advanced)
-
-#### `Pogo\_shm_check`
-
-```php
-function _shm_check(int $fd): bool
-```
-
-Checks if the Shared Memory region at the given File Descriptor is correctly mapped and available.
-
-#### `Pogo\_shm_read`
-
-```php
-function _shm_read(int $fd, int $offset, int $length): string
-```
-
-Reads raw data from the shared memory region. Note: The userland protocol usually handles this automatically via `Pogo\_shm_decode`.
-
-#### `Pogo\_shm_decode`
-
-```php
-function _shm_decode(int $fd, int $offset, int $length): mixed
-```
-
-Decodes JSON data directly from the Shared Memory pointer into a PHP variable (Zval) without allocating an intermediate string. This is a Zero-Copy operation implemented in C.
 
 ### Classes
 
@@ -362,97 +346,117 @@ A Go-native Thread-Safe Channel.
 - **`close(): void`**
   Closes the channel.
 
+### Internal Functions (Advanced)
+
+All internal C-native functions have been moved to the `Pogo\Internal` namespace to prevent accidental misuse. These functions return raw byte strings and do not perform JSON decoding, which is handled by the PHP wrapper classes.
+
+#### `Pogo\Internal\_shm_check`
+
+```php
+function _shm_check(int $fd): bool
+```
+
+Checks if the Shared Memory region at the given File Descriptor is correctly mapped and available.
+
+#### `Pogo\Internal\_shm_read`
+
+```php
+function _shm_read(int $fd, int $offset, int $length): string
+```
+
+Reads raw data from the shared memory region.
+
+#### `Pogo\Internal\_shm_decode`
+
+```php
+function _shm_decode(int $fd, int $offset, int $length): mixed
+```
+
+Decodes JSON data directly from the Shared Memory pointer into a PHP variable (Zval).
+
 ---
 
 ## Architecture & Tech Stack
 
 The system is composed of five distinct layers working in unison.
 
-### Layer A: The Supervisor (`pkg/supervisor`)
+### Layer A: The Supervisor & Process Manager
 
-This layer runs entirely in Go and serves as the kernel of the extension.
+This layer, located in `pkg/supervisor`, acts as the kernel of the extension. It has been fully decoupled into modular components:
 
-- **Process Management:** Spawns `php-cli` processes using `exec.CommandContext`. This ensures that the Go runtime manages the lifecycle of the worker process group, automatically propagating cancellation signals and preventing zombie processes if the host terminates.
-- **Concurrency Model (Semaphore Pattern):** Worker spawning relies on a buffered channel semaphore. This ensures atomic acquisition of worker slots, eliminating race conditions during rapid scaling events where multiple goroutines might otherwise over-provision workers.
-- **Deadlock Prevention:** The Supervisor enforces strict read/write deadlines on worker IPC pipes. If a worker hangs during a handshake or execution, the Supervisor detects the timeout, forcibly kills the process, and releases the semaphore, ensuring the pool recovers automatically.
-- **Test Hooks:** The Supervisor includes internal hooks (`WorkerStarted`, `WorkerKilled`) that allow integration tests to synchronize deterministically with process lifecycle events, eliminating the need for flaky `time.Sleep` calls.
-- **Smart Dynamic Scaling:** The Supervisor calculates the **P95 Latency** of task wait times. Metric calculation uses a **Snapshot-Sort** strategy that runs outside the critical path, ensuring zero impact on job dispatch throughput.
+- **`Process` (proc.go):** Abstracts the OS-level `exec.Cmd`, signal handling, and pipe management. It handles PIDs and ensures correct file descriptor inheritance.
+- **`Transport` (transport.go):** Manages the binary byte-stream protocol (5-byte headers), enforcing timeouts and payload limits.
+- **`AutoScaler` (scaler.go):** A dedicated logic unit that monitors queue depth and P95 latency to issue ScaleUp/ScaleDown decisions. It uses a hysteresis algorithm to prevent "flapping".
+- **Concurrency Model (Semaphore Pattern):** Worker spawning utilizes a strict semaphore and `sync.WaitGroup` to prevent race conditions during rapid scaling or shutdown events.
+- **Deadlock Prevention:** Strict read/write deadlines on IPC pipes prevent the Supervisor from hanging if a worker process freezes.
 
-### Layer B: The Registry (`pogo.go`)
+### Layer B: The Manager & Registry
 
-This layer acts as the state manager bridging CGO.
+The `pogo.go` layer no longer relies on global state. A thread-safe `Manager` struct (`pkg/supervisor/manager.go`) maintains the registry of active pools.
 
-- **Scoped Registry:** Handles (Channels/WaitGroups) are cryptographically bound to their specific **Pool ID**. This strictly prevents "Handle Hijacking," where a resource from Pool A is accidentally or maliciously accessed by Pool B.
-- **Concurrent Safety:** The registry utilizes `sync.Map` instead of a global Mutex. This ensures that high-frequency lookups during concurrent job dispatching are lock-free on the read path.
-- **Non-Blocking Logging Bridge:** Redirects internal Go logs (`log.Printf`) to the PHP SAPI's error stream using a buffered channel with a "Drop" strategy. This prevents the Go runtime from deadlocking if the PHP layer blocks on I/O.
+- **Global State Isolation:** The system is designed to support multiple independent Pogo instances (useful for future ZTS/Swoole integrations).
+- **Scoped Registry:** Handles (Channels/WaitGroups) are cryptographically bound to their specific **Pool ID**. This strictly prevents "Handle Hijacking," where a resource from Pool A is accidentally accessed by Pool B.
 
-### Layer C: The Bridge (`pogo.c`)
+### Layer C: The "Dumb" Bridge (CGO)
 
-The PHP Extension source code.
+The PHP Extension (`pogo.c`) has been stripped of business logic ("Dumb C" pattern).
 
-- **Constants Source of Truth:** Uses generated headers (`pogo_consts.h`) derived from Go definitions to ensure the C layer and Go layer never drift on protocol magic numbers.
-- **O(1) Select Optimization:** The `Pogo\select` implementation constructs a flat array of handles in C before passing them to Go. This avoids iterating the PHP HashTable inside the Go runtime.
-- **Zero-Copy Decode:** For Shared Memory payloads, the C extension maps the memory region and decodes JSON directly from the raw pointer (`Pogo\_shm_decode`), eliminating the need to allocate a PHP string and `memcpy` the data.
+- **Raw Data Flow:** It no longer decodes JSON or inspects payloads. It simply passes raw strings between PHP and Go.
+- **Safety:** This significantly reduces the surface area for C-based memory errors and segmentation faults. All complex data processing is delegated to PHP userland or Go.
+- **O(1) Select:** The `Pogo\select` implementation constructs a flat array of handles in C before passing them to Go, avoiding PHP HashTable iteration inside the Go runtime.
 
-### Layer D: The Protocol & Transport (`Protocol.php`)
+### Layer D: The Protocol & Transport
 
-The user-land PHP library running inside the worker process.
+The user-land PHP library (`Protocol.php`) running inside the worker process.
 
-- **Protocol Negotiation:** Upon startup, the Worker and Host perform a Handshake (Packet Type `0x03`). They negotiate capabilities such as **Binary Serialization (MsgPack)** and **Shared Memory Availability**.
-- **Robustness:** Implements strict `IOException` handling. It detects "Broken Pipe" errors (errno 32) and prevents recursive error reporting loops. It also handles the "Poison Pill" packet (`0x09`) to exit the loop cleanly without triggering fatal error handlers.
-- **Configuration Safety:** Validates environment variables (`FRANKENPHP_WORKER_PIPE_*`) and throws explicit exceptions if the worker is started in an invalid context, preventing silent failures on File Descriptor 3.
+- **Protocol Versioning:** A strict handshake ensures the Supervisor and Worker are speaking the same protocol version (`PROTOCOL_VERSION = 1`).
+- **Robustness:** Implements strict `IOException` handling. It detects "Broken Pipe" errors and prevents recursive error reporting loops.
+- **Safety:** Validates environment variables and throws explicit exceptions if the worker is started in an invalid context.
 
-### Layer E: Shared Memory (`pkg/shm`)
+### Layer E: Shared Memory
 
-A cross-platform abstraction for memory-mapped files.
+A cross-platform abstraction (`pkg/shm`) for memory-mapped files.
 
-- **Allocation:** Creates an anonymous file backed by the OS (supports Linux `memfd_create` semantics and Windows `CreateFileMapping`).
-- **Map-Backed FIFO Queue:** The allocator uses a sophisticated combination of a Ring Buffer for storage and a Hash Map for metadata tracking.
-  - **O(1) Complexity:** Unlike traditional bitmap or linear scan allocators, `Allocate` and `Free` operations are O(1).
-  - **Fragmentation Strategy:** If a payload hits the physical end of the buffer, the allocator inserts virtual padding and wraps to the beginning. The padding is automatically marked as "freed" but blocks the head pointer until logically reached, preserving FIFO integrity.
-  - **Throughput:** Capable of sustaining >800 MB/s in zero-copy benchmarks.
+- **Orphan Collection:** Implements a `FreeByWorkerID` mechanism. If a worker crashes without releasing its memory, the Supervisor automatically reclaims all SHM regions owned by that worker ID, preventing memory leaks.
+- **Map-Backed FIFO Queue:** Uses a Ring Buffer strategy with O(1) allocation.
+- **Fragmentation Strategy:** Metrics now track `shm_fragmentation_bytes` to help tune the `shm_size` configuration.
 
 ---
 
 ## Observability & Metrics
 
-Pogo embeds a lightweight **Prometheus Exporter** within the Supervisor. This allows real-time monitoring of the internal state without relying on PHP scripts (which might block).
+Pogo embeds a lightweight **Prometheus Exporter** within the Supervisor.
 
 **Endpoint:** `http://localhost:9090/metrics`
 
 **Key Metrics:**
 
-| Metric Name            | Type  | Description                                               |
-| :--------------------- | :---- | :-------------------------------------------------------- |
-| `pogo_workers_active`  | Gauge | Number of workers currently executing a job.              |
-| `pogo_workers_total`   | Gauge | Total number of worker processes managed (Active + Idle). |
-| `pogo_ipc_queue_depth` | Gauge | Number of tasks waiting in the Go channel.                |
-| `pogo_go_goroutines`   | Gauge | Number of active Go routines (Leak detection).            |
-| `pogo_go_heap_bytes`   | Gauge | Memory usage of the Supervisor.                           |
+| Metric Name                    | Type  | Description                                               |
+| :----------------------------- | :---- | :-------------------------------------------------------- |
+| `pogo_workers_active`          | Gauge | Number of workers currently executing a job.              |
+| `pogo_workers_total`           | Gauge | Total number of worker processes managed (Active + Idle). |
+| `pogo_ipc_queue_depth`         | Gauge | Number of tasks waiting in the Go channel.                |
+| `pogo_go_goroutines`           | Gauge | Number of active Go routines (Leak detection).            |
+| `pogo_go_heap_bytes`           | Gauge | Memory usage of the Supervisor.                           |
+| `pogo_shm_fragmentation_bytes` | Gauge | Bytes lost due to ring buffer wrapping/padding.           |
 
 ---
 
 ## Performance Engineering
 
-We provide built-in tooling to benchmark and profile the extension's performance.
+Built-in tooling is available to benchmark and profile the extension.
 
 ### Micro-Benchmarks
 
-You can run the Go-level micro-benchmarks to verify allocation strategies and dispatch latency:
+Run Go-level micro-benchmarks to verify allocation strategies and dispatch latency:
 
 ```bash
 make bench
 ```
 
-This tests:
-
-- **Shared Memory:** Allocation/Free ops/sec under contention.
-- **Serialization:** MsgPack vs JSON efficiency.
-- **Internal Bus:** Go Runtime dispatch overhead (excluding PHP process overhead).
-
 ### Profiling
 
-To visualize CPU or Memory usage using `go tool pprof` (requires Graphviz):
+Visualize CPU or Memory usage using `go tool pprof`:
 
 ```bash
 # CPU Flamegraph
@@ -466,19 +470,14 @@ make profile-mem
 
 ## Quality Assurance & Testing
 
-Stability is the primary directive of Pogo. The codebase is verified using a rigorous multi-stage test suite executed via the `Makefile`.
-
-1. **Unit Tests (`make test-unit`):** Fast, deterministic tests running in both Go (standard library) and PHP (extension logic) environments.
-   - **Test Hygiene:** Our Go tests utilize channel-based hooks instead of `time.Sleep` to ensure tests are fast and non-flaky.
-   - **State-Based Assertions:** PHP parallel execution tests use timestamp overlap verification rather than wall-clock duration thresholds, ensuring reliability on variable-speed CI runners.
-2. **The "Ouroboros" Torture Test (`make torture-ouroboros`):** A sustained load test that pushes hundreds of megabytes through the Shared Memory Ring Buffer to verify memory safety, buffer rotation, and zero-copy data integrity.
-3. **The "Chaos" Torture Test (`make torture-chaos`):** A resilience test that intentionally kills (`SIGKILL`, `exit(1)`) active worker processes while the system is under load. This verifies that the Supervisor detects dead workers, releases locks/semaphores, and respawns replacements without dropping pending requests.
+1. **Unit Tests (`make test-unit`):** Fast, deterministic tests. Includes `pkg/shm` tests verifying memory safety without spawning processes.
+2. **The "Ouroboros" Torture Test:** A sustained load test pushing data through the Shared Memory Ring Buffer to verify rotation and zero-copy integrity.
+3. **The "Chaos" Torture Test:** A resilience test that intentionally kills (`SIGKILL`, `exit(1)`) active worker processes under load to verify the Supervisor's recovery and orphan collection logic.
+4. **Protocol Fuzzing:** Go fuzz tests ensure the Supervisor does not crash when receiving malformed packets from workers.
 
 ---
 
 ## The Protocol Specification
-
-Understanding the protocol is crucial for debugging or writing custom worker implementations.
 
 ### Transport
 
@@ -488,7 +487,7 @@ Understanding the protocol is crucial for debugging or writing custom worker imp
 
 ### Packet Structure
 
-Every message sent over the pipe corresponds to a **5-Byte Header** followed by a **Variable Body**.
+Every message corresponds to a **5-Byte Header** followed by a **Variable Body**.
 
 | Byte Offset | Type                  | Description                      |
 | :---------- | :-------------------- | :------------------------------- |
@@ -500,10 +499,10 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 
 - `0x00` (**DATA**): Standard payload. Body is the serialized data.
 - `0x01` (**ERROR**): User-space exception. Worker remains alive.
-- `0x02` (**FATAL**): Critical failure (e.g., Parse Error, OOM). The Go Supervisor will immediately kill and replace the worker.
-- `0x03` (**HELLO**): Handshake packet. Contains protocol version, Pool ID, and capabilities.
-- `0x04` (**SHM**): Shared Memory Pointer. The body is exactly 8 bytes: `[Offset (UInt32)][Length (UInt32)]`. The actual data resides in the mmap region at `Offset`.
-- `0x09` (**SHUTDOWN**): "Poison Pill". Sent by the Host to instruct the Worker to exit cleanly immediately. Body length is 0.
+- `0x02` (**FATAL**): Critical failure. The Go Supervisor will immediately kill and replace the worker.
+- `0x03` (**HELLO**): Handshake packet. Contains `protocol_version`, Pool ID, and capabilities.
+- `0x04` (**SHM**): Shared Memory Pointer. The body is exactly 8 bytes: `[Offset (UInt32)][Length (UInt32)]`.
+- `0x09` (**SHUTDOWN**): "Poison Pill". Sent by the Host to instruct the Worker to exit.
 
 ---
 
@@ -511,6 +510,6 @@ Every message sent over the pipe corresponds to a **5-Byte Header** followed by 
 
 ### Known Limitations
 
-1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and `Pogo\Channel` / `Pogo\WaitGroup` objects can be passed.
-2. **Windows Process Management:** While the SHM layer is now cross-platform, full process lifecycle management (signals) on Windows behaves differently than POSIX systems. Primary support targets Linux/MacOS.
-3. **Ring Buffer Tail Padding:** The strict FIFO nature of the Ring Buffer requires wrapping back to the start when a payload hits the physical end of the buffer. This may result in unused "tail padding" bytes if large payloads are frequent. Increasing `shm_size` mitigates this.
+1. **Serialization:** Resources (Database connections, File handles) cannot be passed between Main and Worker. Only Serializable data and Pogo channels can be passed.
+2. **Windows Process Management:** Primary support targets Linux/MacOS. Windows support exists but process lifecycle management differs.
+3. **Ring Buffer Tail Padding:** The strict FIFO nature requires wrapping back to the start when a payload hits the end of the buffer. Unused tail bytes are tracked as `shm_fragmentation_bytes`.

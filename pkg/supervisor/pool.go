@@ -185,6 +185,8 @@ func (p *Pool) GetStats() map[string]any {
 		stats["shm_used_bytes"] = shmStats.UsedBytes
 		stats["shm_free_bytes"] = shmStats.FreeBytes
 		stats["shm_wasted_bytes"] = shmStats.WastedBytes
+		// Alias for roadmap compliance
+		stats["shm_fragmentation_bytes"] = shmStats.WastedBytes
 	}
 	p.shmMu.RUnlock()
 
@@ -886,8 +888,6 @@ func (p *Pool) performHandshake(w *phpWorker) error {
 	if err := json.Unmarshal(body, &ack); err != nil {
 		return err
 	}
-
-	// Optional: Check ack["protocol_version"] here if we want strict bidirectional check
 
 	if caps, ok := ack["capabilities"].(map[string]any); ok {
 		if proto, ok := caps["protocol"].(string); ok && proto == "msgpack" {
