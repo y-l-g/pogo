@@ -108,7 +108,7 @@ Mount your current directory into the pre-built image.
 docker run --rm -p 8080:80 \
   -v "${PWD}:/app" \
   -e SERVER_NAME=:80 \
-  pogo:latest
+  ghcr.io/y-l-g/pogo:latest
 ```
 
 **Option B: Using Linux Binary**

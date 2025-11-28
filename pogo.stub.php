@@ -130,5 +130,10 @@ namespace Pogo\Runtime {
          * Dispatches a job specifically to this pool.
          */
         public function submit(string $jobClass, array $args = []): \Pogo\Future {}
+
+        /**
+         * Returns the unique ID of this pool.
+         */
+        public function id(): int {}
     }
 }

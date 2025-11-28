@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 6f3578fb064731af7f600b1bad062653db9f16e5 */
+ * Stub hash: a497d9f50fee2adccfdd51115c5d7e2004d0fcf3 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_Pogo__gopogo_init, 0, 0, IS_VOID, 0)
 ZEND_END_ARG_INFO()
@@ -110,6 +110,9 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_Pogo_Runtime_Pool_submit, 0
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, args, IS_ARRAY, 0, "[]")
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Pogo_Runtime_Pool_id, 0, 0, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_FUNCTION(Pogo__gopogo_init);
 ZEND_FUNCTION(Pogo__shm_read);
 ZEND_FUNCTION(Pogo__shm_decode);
@@ -138,6 +141,7 @@ ZEND_METHOD(Pogo_Runtime_Pool, __construct);
 ZEND_METHOD(Pogo_Runtime_Pool, start);
 ZEND_METHOD(Pogo_Runtime_Pool, shutdown);
 ZEND_METHOD(Pogo_Runtime_Pool, submit);
+ZEND_METHOD(Pogo_Runtime_Pool, id);
 
 static const zend_function_entry ext_functions[] = {
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("Pogo", "_gopogo_init"), zif_Pogo__gopogo_init, arginfo_Pogo__gopogo_init, 0, NULL, NULL)
@@ -189,6 +193,7 @@ static const zend_function_entry class_Pogo_Runtime_Pool_methods[] = {
 	ZEND_ME(Pogo_Runtime_Pool, start, arginfo_class_Pogo_Runtime_Pool_start, ZEND_ACC_PUBLIC)
 	ZEND_ME(Pogo_Runtime_Pool, shutdown, arginfo_class_Pogo_Runtime_Pool_shutdown, ZEND_ACC_PUBLIC)
 	ZEND_ME(Pogo_Runtime_Pool, submit, arginfo_class_Pogo_Runtime_Pool_submit, ZEND_ACC_PUBLIC)
+	ZEND_ME(Pogo_Runtime_Pool, id, arginfo_class_Pogo_Runtime_Pool_id, ZEND_ACC_PUBLIC)
 	ZEND_FE_END
 };
 

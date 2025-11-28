@@ -6,50 +6,17 @@ ini_set('display_errors', 'stderr');
 ini_set('log_errors', '1');
 
 $vendorAutoload = __DIR__ . '/../vendor/autoload.php';
-$loaded = false;
 
-// 1. Bootstrap
-// Try standard Composer autoload first
-if (file_exists($vendorAutoload)) {
-    require $vendorAutoload;
-    $loaded = true;
+if (!file_exists($vendorAutoload)) {
+    fwrite(STDERR, "[Worker Fatal] vendor/autoload.php not found. Please run 'composer install'.\n");
+    exit(1);
 }
 
-// 2. Resilience: Check if Pogo\Runtime\Protocol is actually available.
-// If the vendor/autoload.php was a mock (from tests) or incomplete, we must fallback.
-if (!class_exists('Pogo\\Runtime\\Protocol')) {
-    spl_autoload_register(function ($class) {
-        $prefix = 'Pogo\\';
-        $baseDir = __DIR__ . '/../lib/';
-
-        if (strncmp($prefix, $class, strlen($prefix)) === 0) {
-            $relative = substr($class, strlen($prefix));
-            $file = $baseDir . str_replace('\\', '/', $relative) . '.php';
-            if (file_exists($file)) {
-                require $file;
-            }
-        }
-    });
-}
-
-// 3. Test Suite Autoloader
-// We ALWAYS register this when running in the source repository context,
-// because "composer install" wouldn't know about tests/Jobs classes anyway.
-$testsDir = __DIR__ . '/../tests/Jobs/';
-if (is_dir($testsDir)) {
-    spl_autoload_register(function ($class) use ($testsDir) {
-        // Simple class name to file map for Test Jobs (no namespace)
-        $file = $testsDir . str_replace('\\', '/', $class) . '.php';
-        if (file_exists($file)) {
-            require $file;
-        }
-    });
-}
+require $vendorAutoload;
 
 use Pogo\Runtime\Protocol;
 use Pogo\Runtime\IOException;
 
-// Ensure Protocol is loaded before instantiating
 if (!class_exists(Protocol::class)) {
     fwrite(STDERR, "[Worker Fatal] Failed to load Pogo\\Runtime\\Protocol. Check autoloading.\n");
     exit(1);
@@ -107,9 +74,7 @@ while (true) {
 
         if (!isset($services[$class])) {
             if (!class_exists($class)) {
-                // Provide a hint in the error if we are in a weird state
-                $hint = file_exists(__DIR__ . '/../tests/Jobs/' . $class . '.php') ? " (File exists in tests/Jobs)" : "";
-                throw new Exception("Class $class not found$hint");
+                throw new Exception("Class $class not found");
             }
             $services[$class] = new $class();
         }

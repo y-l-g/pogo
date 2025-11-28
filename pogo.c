@@ -564,6 +564,12 @@ PHP_METHOD(Pogo_Runtime_Pool, submit) {
     zval_ptr_dtor(&channel_obj);
 }
 
+// Added method to expose Pool ID
+PHP_METHOD(Pogo_Runtime_Pool, id) {
+    pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
+    RETURN_LONG((long)intern->go_handle);
+}
+
 PHP_METHOD(Pogo_WaitGroup, __construct) {
     pogo_object *intern = pogo_object_from_obj(Z_OBJ_P(ZEND_THIS));
     intern->go_handle = create_WaitGroup_object();

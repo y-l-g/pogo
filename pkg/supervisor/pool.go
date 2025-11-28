@@ -1,15 +1,14 @@
 package supervisor
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"reflect"
 	"runtime/cgo"
 	"sort"
@@ -30,9 +29,8 @@ type GoTask struct {
 
 type phpWorker struct {
 	id            int
-	ipcWriter     io.WriteCloser
-	ipcReader     io.ReadCloser
-	cmd           *exec.Cmd
+	process       *Process
+	transport     *Transport
 	dead          atomic.Bool
 	jobsProcessed int32
 
@@ -141,8 +139,11 @@ type Pool struct {
 	workersListMu sync.Mutex
 
 	shm      *shm.SharedMemory
+	shmMu    sync.RWMutex // Protects access to shm (Close vs Read/Write)
 	mpHandle codec.MsgpackHandle
 	config   PoolConfig
+
+	spawnWg sync.WaitGroup // Waits for spawn routines to finish
 }
 
 func NewPool(id int64) *Pool {
@@ -166,6 +167,7 @@ func NewPool(id int64) *Pool {
 	MetricWorkerIdle(id) // Ensure label exists
 
 	for i := 0; i < 4; i++ {
+		p.wg.Add(1)
 		go p.goWorkerLoop()
 	}
 	return p
@@ -213,6 +215,7 @@ func (p *Pool) GetStats() map[string]any {
 		"p95_wait_ms":    p.latency.P95(),
 	}
 
+	p.shmMu.RLock()
 	if p.shm != nil {
 		shmStats := p.shm.GetStats()
 		stats["shm_total_bytes"] = shmStats.TotalBytes
@@ -220,6 +223,7 @@ func (p *Pool) GetStats() map[string]any {
 		stats["shm_free_bytes"] = shmStats.FreeBytes
 		stats["shm_wasted_bytes"] = shmStats.WastedBytes
 	}
+	p.shmMu.RUnlock()
 
 	return stats
 }
@@ -228,12 +232,16 @@ func (p *Pool) ValidateHandles(payload map[string]any) error {
 	for _, v := range payload {
 		switch val := v.(type) {
 		case uint64:
+			// Resolve handle to check ownership
 			if obj := getHandleValue(uintptr(val)); obj != nil {
-				if ch, ok := obj.(*Channel); ok && ch.OwnerPoolID != 0 && ch.OwnerPoolID != p.ID {
-					return fmt.Errorf("Channel belongs to Pool %d", ch.OwnerPoolID)
-				}
-				if wg, ok := obj.(*WaitGroup); ok && wg.OwnerPoolID != 0 && wg.OwnerPoolID != p.ID {
-					return fmt.Errorf("WaitGroup belongs to Pool %d", wg.OwnerPoolID)
+				if ch, ok := obj.(*Channel); ok {
+					if ch.OwnerPoolID != 0 && ch.OwnerPoolID != p.ID {
+						return fmt.Errorf("Channel belongs to Pool %d", ch.OwnerPoolID)
+					}
+				} else if wg, ok := obj.(*WaitGroup); ok {
+					if wg.OwnerPoolID != 0 && wg.OwnerPoolID != p.ID {
+						return fmt.Errorf("WaitGroup belongs to Pool %d", wg.OwnerPoolID)
+					}
 				}
 			}
 		case map[string]any:
@@ -274,32 +282,43 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 		}
 
 		var err error
+		p.shmMu.Lock()
 		p.shm, err = shm.NewSharedMemory(p.config.ShmSize)
 		if err != nil {
 			log.Printf("[Pool %d] SHM init failed: %v", p.ID, err)
 		} else {
 			log.Printf("[Pool %d] Shared Memory initialized (%d bytes)", p.ID, p.shm.Size)
 		}
+		p.shmMu.Unlock()
 
 		p.workers = make(chan *phpWorker, p.maxWorkers)
 		p.workerSemaphore = make(chan struct{}, p.maxWorkers)
 
 		for i := 0; i < int(p.minWorkers); i++ {
-			select {
-			case p.workerSemaphore <- struct{}{}:
-				w := p.spawnWorker()
-				if w != nil {
-					p.updatePeakWorkers()
-					p.workers <- w
-				}
-			default:
-				log.Printf("[Pool %d] Warn: Min workers > Max workers capacity?", p.ID)
-			}
+			p.trySpawnWorker()
 		}
 		log.Printf("[Pool %d] Started with %d workers", p.ID, len(p.workerSemaphore))
 
 		go p.scalerLoop()
 	})
+}
+
+// trySpawnWorker attempts to acquire a semaphore slot and spawn a worker.
+// It is safe to call concurrently.
+func (p *Pool) trySpawnWorker() {
+	if p.ctx.Err() != nil {
+		return
+	}
+	select {
+	case p.workerSemaphore <- struct{}{}:
+		// Semaphore acquired. Proceed to spawn.
+		p.updatePeakWorkers()
+		// spawnWorker now handles its own lifecycle including releasing the semaphore on exit.
+		p.spawnWg.Add(1)
+		go p.spawnWorkerRoutine()
+	default:
+		// Pool full
+	}
 }
 
 func (p *Pool) scalerLoop() {
@@ -337,23 +356,12 @@ func (p *Pool) checkScaling() {
 	p.spawnMu.Unlock()
 
 	if shouldSpawn {
-		go func() {
-			select {
-			case p.workerSemaphore <- struct{}{}:
-				p.updatePeakWorkers()
+		p.spawnMu.Lock()
+		p.lastSpawn = time.Now()
+		p.spawnMu.Unlock()
 
-				p.spawnMu.Lock()
-				p.lastSpawn = time.Now()
-				p.spawnMu.Unlock()
-
-				log.Printf("[Pool %d] Scaling UP (P95: %dms, Queue: %d)", p.ID, latencyP95, queueDepth)
-				w := p.spawnWorker()
-				if w != nil {
-					p.workers <- w
-				}
-			default:
-			}
-		}()
+		log.Printf("[Pool %d] Scaling UP (P95: %dms, Queue: %d)", p.ID, latencyP95, queueDepth)
+		p.trySpawnWorker()
 		p.scaleUpVotes = 0
 	}
 
@@ -372,11 +380,15 @@ func (p *Pool) checkScaling() {
 }
 
 func (p *Pool) Shutdown() {
+	// 1. Cancel Context FIRST. This stops new spawns and signals running routines to exit.
+	p.cancel()
+
+	// 2. Wait for pending spawn routines to finish or abort.
+	p.spawnWg.Wait()
+
 	if p.workers == nil {
 		return
 	}
-
-	p.cancel()
 
 	p.workersListMu.Lock()
 	defer p.workersListMu.Unlock()
@@ -386,12 +398,11 @@ func (p *Pool) Shutdown() {
 	for _, w := range p.workersList {
 		w.dead.Store(true)
 
-		if w.ipcWriter != nil {
-			packet := []byte{0, 0, 0, 0, PktTypeShutdown}
-			_, _ = w.ipcWriter.Write(packet)
+		if w.transport != nil {
+			_ = w.transport.WritePacket(PktTypeShutdown, []byte{})
 		}
 
-		if w.cmd != nil && w.cmd.Process != nil {
+		if w.process != nil {
 			living = append(living, w)
 		}
 	}
@@ -401,20 +412,24 @@ func (p *Pool) Shutdown() {
 			time.Sleep(200 * time.Millisecond)
 
 			for _, w := range targets {
-				if w.cmd.Process != nil {
-					_ = w.cmd.Process.Signal(syscall.SIGKILL)
+				_ = w.process.Signal(syscall.SIGKILL)
+				if w.transport != nil {
+					_ = w.transport.Close()
 				}
-				_ = w.ipcWriter.Close()
-				_ = w.ipcReader.Close()
 			}
 		}(living)
 	}
 
+	p.shmMu.Lock()
 	if p.shm != nil {
 		_ = p.shm.Close()
+		p.shm = nil // Prevent use-after-free
 	}
+	p.shmMu.Unlock()
 
 	log.Printf("[Pool %d] Shutdown signal sent.", p.ID)
+	// Wait for goWorkerLoop to exit
+	p.wg.Wait()
 }
 
 func (p *Pool) registerBuiltinWorkers() {
@@ -432,6 +447,7 @@ func (p *Pool) registerBuiltinWorkers() {
 }
 
 func (p *Pool) goWorkerLoop() {
+	defer p.wg.Done()
 	for {
 		select {
 		case task := <-p.tasks:
@@ -494,15 +510,8 @@ func (p *Pool) handlePooledDispatch(payload map[string]any) {
 				}
 				worker = w
 			default:
-				select {
-				case p.workerSemaphore <- struct{}{}:
-					p.updatePeakWorkers()
-					newW := p.spawnWorker()
-					if newW != nil {
-						worker = newW
-					}
-				default:
-				}
+				// Attempt to spawn if we need more workers
+				p.trySpawnWorker()
 			}
 
 			if worker != nil {
@@ -572,27 +581,37 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 
 	length := uint32(len(taskData))
 
+	p.shmMu.RLock()
 	useShm := worker.useShm && p.shm != nil && length > 1024
+	p.shmMu.RUnlock()
+
 	allocatedOffset := int64(-1)
 
 	if useShm {
 		allocLen := int(length) + 1
-		offset, err := p.shm.Allocate(allocLen)
-		if err != nil {
+		p.shmMu.RLock()
+		// Double check under lock
+		if p.shm == nil {
 			useShm = false
 		} else {
-			if err := p.shm.WriteAt(offset, []byte{0x01}); err != nil {
+			offset, err := p.shm.Allocate(allocLen, worker.id)
+			if err != nil {
 				useShm = false
-			} else if err := p.shm.WriteAt(offset+1, taskData); err != nil {
-				useShm = false
-			} else if err := p.shm.WriteAt(offset, []byte{0x02}); err != nil {
-				useShm = false
+			} else {
+				if err := p.shm.WriteAt(offset, []byte{0x01}); err != nil {
+					useShm = false
+				} else if err := p.shm.WriteAt(offset+1, taskData); err != nil {
+					useShm = false
+				} else if err := p.shm.WriteAt(offset, []byte{0x02}); err != nil {
+					useShm = false
+				}
+				allocatedOffset = offset
 			}
-			allocatedOffset = offset
 		}
+		p.shmMu.RUnlock()
 	}
 
-	if err := worker.ipcWriter.(*os.File).SetWriteDeadline(time.Now().Add(p.config.IpcTimeout)); err != nil {
+	if err := worker.transport.SetWriteDeadline(time.Now().Add(p.config.IpcTimeout)); err != nil {
 		p.killWorker(worker, returnCh, "SetWriteDeadline Failed")
 		return true
 	}
@@ -602,74 +621,65 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 		binary.BigEndian.PutUint32(packet[0:4], uint32(allocatedOffset))
 		binary.BigEndian.PutUint32(packet[4:8], length)
 
-		if err := binary.Write(worker.ipcWriter, binary.BigEndian, uint32(8)); err != nil {
+		if err := worker.transport.WritePacket(PktTypeShm, packet); err != nil {
 			p.killWorker(worker, returnCh, "IPC Error")
 			return true
 		}
-		if _, err := worker.ipcWriter.Write([]byte{PktTypeShm}); err != nil {
-			p.killWorker(worker, returnCh, "IPC Error")
-			return true
-		}
-		if _, err := worker.ipcWriter.Write(packet); err != nil {
-			p.killWorker(worker, returnCh, "IPC Error")
-			return true
-		}
-
 	} else {
-		if err := binary.Write(worker.ipcWriter, binary.BigEndian, length); err != nil {
-			p.killWorker(worker, returnCh, "IPC Error")
-			return true
-		}
-		if _, err := worker.ipcWriter.Write([]byte{PktTypeData}); err != nil {
-			p.killWorker(worker, returnCh, "IPC Error")
-			return true
-		}
-		if _, err := worker.ipcWriter.Write(taskData); err != nil {
+		if err := worker.transport.WritePacket(PktTypeData, taskData); err != nil {
 			p.killWorker(worker, returnCh, "IPC Error")
 			return true
 		}
 	}
 
-	_ = worker.ipcWriter.(*os.File).SetWriteDeadline(time.Time{})
+	_ = worker.transport.SetWriteDeadline(time.Time{})
 
 	if p.config.JobTimeout > 0 {
-		if err := worker.ipcReader.(*os.File).SetReadDeadline(time.Now().Add(p.config.JobTimeout)); err != nil {
+		if err := worker.transport.SetReadDeadline(time.Now().Add(p.config.JobTimeout)); err != nil {
 			p.killWorker(worker, returnCh, "SetReadDeadline Failed")
 			return true
 		}
 	}
 
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(worker.ipcReader, header); err != nil {
+	respType, respBody, err := worker.transport.ReadPacket()
+	if err != nil {
 		if useShm {
-			p.shm.Free(allocatedOffset)
+			p.shmMu.RLock()
+			if p.shm != nil {
+				p.shm.Free(allocatedOffset)
+			}
+			p.shmMu.RUnlock()
 		}
+
 		reason := ""
 		if os.IsTimeout(err) {
 			reason = fmt.Sprintf("Job Timed Out (>%s)", p.config.JobTimeout)
+		} else if errors.Is(err, ErrPayloadTooLarge) {
+			reason = err.Error()
+		} else if err != io.EOF {
+			// If it's EOF, it means worker closed (probably crashed).
+			// If it's other error (e.g. pipe broken), report it.
+			reason = fmt.Sprintf("IPC Read Error: %v", err)
 		}
+
 		p.killWorker(worker, returnCh, reason)
+
+		// Fatal Protocol Error: Do not retry
+		if errors.Is(err, ErrPayloadTooLarge) {
+			return true
+		}
+
 		return false
 	}
 
-	_ = worker.ipcReader.(*os.File).SetReadDeadline(time.Time{})
+	_ = worker.transport.SetReadDeadline(time.Time{})
 
 	if useShm {
-		p.shm.Free(allocatedOffset)
-	}
-
-	respLen := binary.BigEndian.Uint32(header[0:4])
-	respType := header[4]
-
-	if respLen > MaxPayloadSize {
-		p.killWorker(worker, returnCh, fmt.Sprintf("Response too large (%d > %d)", respLen, MaxPayloadSize))
-		return true
-	}
-
-	respBody := make([]byte, respLen)
-	if _, err := io.ReadFull(worker.ipcReader, respBody); err != nil {
-		p.killWorker(worker, nil, "")
-		return false
+		p.shmMu.RLock()
+		if p.shm != nil {
+			p.shm.Free(allocatedOffset)
+		}
+		p.shmMu.RUnlock()
 	}
 
 	finalBody := respBody
@@ -708,103 +718,105 @@ func (p *Pool) executeOnWorker(worker *phpWorker, payload map[string]any, return
 	return true
 }
 
-func (p *Pool) spawnWorker() *phpWorker {
-	if p.ctx.Err() != nil {
-		// We are shutting down, so we don't start a worker.
-		// Caller should have checked ctx, but if they are blocked on semaphore...
-		// If we return nil, we must ensure semaphore is released IF we own the slot.
-		// Since we didn't start a goroutine, we should release.
+// spawnWorkerRoutine manages the full lifecycle of a worker process in its own goroutine.
+// It is responsible for releasing the semaphore when the worker exits.
+func (p *Pool) spawnWorkerRoutine() {
+	defer p.spawnWg.Done() // Signal termination to Shutdown()
+
+	// 1. Release Semaphore on Exit (Always)
+	defer func() {
 		select {
 		case <-p.workerSemaphore:
 		default:
+			// Should not happen if logic is correct, but safe fallback
+			log.Printf("[Pool %d] Panic: Semaphore empty on release?", p.ID)
 		}
-		return nil
+
+		// Auto-recovery: If we are not shutting down, try to replace the worker
+		if p.ctx.Err() == nil {
+			current := len(p.workerSemaphore)
+			if int32(current) < p.minWorkers {
+				// We need to replace this worker.
+				go func() {
+					time.Sleep(1 * time.Second) // Penalty delay
+					p.trySpawnWorker()
+				}()
+			}
+		}
+	}()
+
+	if p.ctx.Err() != nil {
+		return
 	}
 
+	// 2. Setup Process
 	id := int(atomic.AddInt32(&p.workerIdCounter, 1))
 
-	var bin string
-	var args []string
-
-	if testBin := os.Getenv("POGO_TEST_PHP_BINARY"); testBin != "" {
-		bin = testBin
-		args = []string{p.entrypoint}
-	} else {
-		ex, err := os.Executable()
-		if err != nil {
-			bin = "php"
-		} else {
-			bin = ex
-		}
-		args = []string{"php-cli", p.entrypoint}
+	env := map[string]string{
+		"FRANKENPHP_WORKER_PIPE_IN":  "3",
+		"FRANKENPHP_WORKER_PIPE_OUT": "4",
 	}
 
-	cmd := exec.CommandContext(p.ctx, bin, args...)
+	var extraFiles []*os.File
 
-	var stderrCapture bytes.Buffer
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrCapture)
-
-	configureCmd(cmd)
-
-	parentRead, childWrite, _ := os.Pipe()
-	childRead, parentWrite, _ := os.Pipe()
-
-	extraFiles := []*os.File{childRead, childWrite}
-
-	cmd.Env = append(os.Environ(),
-		"FRANKENPHP_WORKER_PIPE_IN=3",
-		"FRANKENPHP_WORKER_PIPE_OUT=4",
-	)
-
+	p.shmMu.RLock()
 	if p.shm != nil && p.shm.File() != nil {
 		extraFiles = append(extraFiles, p.shm.File())
-		cmd.Env = append(cmd.Env, "FRANKENPHP_WORKER_SHM_FD=5")
+		env["FRANKENPHP_WORKER_SHM_FD"] = "5"
 	}
+	p.shmMu.RUnlock()
 
-	cmd.ExtraFiles = extraFiles
-	cmd.Stderr = os.Stderr
+	process, err := NewProcess(p.ctx, p.entrypoint, env, extraFiles)
+	if err != nil {
+		// Failed to init process (pipes?)
+		return
+	}
 
 	worker := &phpWorker{
 		id:         id,
-		ipcWriter:  parentWrite,
-		ipcReader:  parentRead,
-		cmd:        cmd,
+		transport:  NewTransport(process.ParentRead, process.ParentWrite),
+		process:    process,
 		lastActive: time.Now(),
 	}
 
+	// 3. Register Worker
 	p.workersListMu.Lock()
+	// Check context again inside lock to prevent race with shutdown
+	if p.ctx.Err() != nil {
+		p.workersListMu.Unlock()
+		process.Close() // Cleanup pipes
+		return
+	}
 	p.workersList[id] = worker
 	p.workersListMu.Unlock()
 
-	if err := cmd.Start(); err != nil {
-		_ = parentRead.Close()
-		_ = parentWrite.Close()
-		_ = childRead.Close()
-		_ = childWrite.Close()
+	// 4. Start Process
+	if err := process.Start(); err != nil {
+		worker.transport.Close()
+		process.Close()
 		p.workersListMu.Lock()
 		delete(p.workersList, id)
 		p.workersListMu.Unlock()
-
-		// FAILED TO START: Release Semaphore immediately.
-		select {
-		case <-p.workerSemaphore:
-		default:
-		}
-		return nil
+		return // defer releases semaphore
 	}
 
 	MetricWorkerSpawn(p.ID)
 
-	_ = childRead.Close()
-	_ = childWrite.Close()
+	// 5. Handshake
+	if err := p.performHandshake(worker); err != nil {
+		// Handshake failed.
+		// Kill logic:
+		_ = worker.transport.Close()
+		_ = process.Kill()
+		_ = process.Wait() // Harvest zombie
 
-	// Goroutine owns the semaphore slot now.
-	go func() {
-		_ = cmd.Wait()
-		worker.dead.Store(true)
+		p.workersListMu.Lock()
+		delete(p.workersList, id)
+		p.workersListMu.Unlock()
 
 		MetricWorkerKill(p.ID)
 
+		// ADDED: Trigger hook to satisfy TestCrashResilience
 		if p.config.TestHooks != nil && p.config.TestHooks.WorkerKilled != nil {
 			select {
 			case p.config.TestHooks.WorkerKilled <- worker.id:
@@ -812,46 +824,7 @@ func (p *Pool) spawnWorker() *phpWorker {
 			}
 		}
 
-		p.workersListMu.Lock()
-		delete(p.workersList, id)
-		p.workersListMu.Unlock()
-
-		<-p.workerSemaphore
-
-		uptime := time.Since(worker.getLastActive())
-		// Relaxed penalty for faster recovery in tests
-		if uptime < 1*time.Second {
-			time.Sleep(1 * time.Second)
-		}
-
-		if p.ctx.Err() == nil {
-			current := len(p.workerSemaphore)
-			if int32(current) < p.minWorkers {
-				select {
-				case p.workerSemaphore <- struct{}{}:
-					p.updatePeakWorkers()
-					newW := p.spawnWorker()
-					if newW != nil {
-						p.workers <- newW
-					}
-				default:
-				}
-			}
-		}
-	}()
-
-	if err := p.performHandshake(worker); err != nil {
-		output := stderrCapture.String()
-		if output == "" {
-			output = "<no output>"
-		}
-		log.Printf("[Pool %d] Handshake failed #%d: %v. \n--- Worker Startup Error ---\n%s\n----------------------------",
-			p.ID, id, err, output)
-		if err == io.EOF {
-			return nil
-		}
-		p.killWorker(worker, nil, "")
-		return nil
+		return // defer releases semaphore
 	}
 
 	if p.config.TestHooks != nil && p.config.TestHooks.WorkerStarted != nil {
@@ -861,7 +834,35 @@ func (p *Pool) spawnWorker() *phpWorker {
 		}
 	}
 
-	return worker
+	// 6. Push to Available Workers
+	p.workers <- worker
+
+	// 7. Wait for Exit
+	_ = process.Wait()
+	worker.dead.Store(true)
+
+	// 8. Cleanup
+	MetricWorkerKill(p.ID)
+
+	if p.config.TestHooks != nil && p.config.TestHooks.WorkerKilled != nil {
+		select {
+		case p.config.TestHooks.WorkerKilled <- worker.id:
+		default:
+		}
+	}
+
+	p.workersListMu.Lock()
+	delete(p.workersList, id)
+	p.workersListMu.Unlock()
+
+	// Orphan Collection
+	p.shmMu.RLock()
+	if p.shm != nil {
+		p.shm.FreeByWorkerID(worker.id)
+	}
+	p.shmMu.RUnlock()
+
+	// defer block handles semaphore release and respawn logic
 }
 
 func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
@@ -880,22 +881,26 @@ func (p *Pool) killWorker(worker *phpWorker, returnCh *Channel, reason string) {
 			}
 		}()
 
-		if worker.ipcWriter != nil {
-			_ = worker.ipcWriter.Close()
+		// Orphan Collection: Claim any allocated SHM regions back
+		p.shmMu.RLock()
+		if p.shm != nil {
+			p.shm.FreeByWorkerID(worker.id)
 		}
-		if worker.ipcReader != nil {
-			_ = worker.ipcReader.Close()
+		p.shmMu.RUnlock()
+
+		if worker.transport != nil {
+			_ = worker.transport.Close()
 		}
 
-		if worker.cmd != nil && worker.cmd.Process != nil {
-			_ = worker.cmd.Process.Kill()
+		if worker.process != nil {
+			_ = worker.process.Kill()
 		}
 	}()
 
-	// Metric update happens in the Wait() goroutine
-	p.workersListMu.Lock()
-	delete(p.workersList, worker.id)
-	p.workersListMu.Unlock()
+	// We do NOT remove from workersList here immediately because spawnWorkerRoutine
+	// owns the lifecycle and will do cleanup after Wait returns.
+	// However, we need to ensure it doesn't get picked up again.
+	// The `dead` flag handles that in the dispatch loop.
 }
 
 func (p *Pool) performHandshake(w *phpWorker) error {
@@ -909,37 +914,25 @@ func (p *Pool) performHandshake(w *phpWorker) error {
 	// ENFORCE DEADLINE for Handshake
 	// This prevents the Supervisor from hanging if the worker starts but doesn't talk.
 	deadline := time.Now().Add(5 * time.Second) // 5s should be ample for PHP boot even in debug/race mode
-	_ = w.ipcWriter.(*os.File).SetWriteDeadline(deadline)
-	_ = w.ipcReader.(*os.File).SetReadDeadline(deadline)
+	_ = w.transport.SetWriteDeadline(deadline)
+	_ = w.transport.SetReadDeadline(deadline)
 
-	if err := binary.Write(w.ipcWriter, binary.BigEndian, uint32(len(data))); err != nil {
-		return err
-	}
-	if _, err := w.ipcWriter.Write([]byte{PktTypeHello}); err != nil {
-		return err
-	}
-	if _, err := w.ipcWriter.Write(data); err != nil {
+	if err := w.transport.WritePacket(PktTypeHello, data); err != nil {
 		return err
 	}
 
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(w.ipcReader, header); err != nil {
+	header, body, err := w.transport.ReadPacket()
+	if err != nil {
 		return err
 	}
 
-	respLen := binary.BigEndian.Uint32(header[0:4])
-	if header[4] != PktTypeHello {
+	if header != PktTypeHello {
 		return fmt.Errorf("expected HELLO_ACK")
 	}
 
-	body := make([]byte, respLen)
-	if _, err := io.ReadFull(w.ipcReader, body); err != nil {
-		return err
-	}
-
 	// Clear deadlines after successful handshake
-	_ = w.ipcWriter.(*os.File).SetWriteDeadline(time.Time{})
-	_ = w.ipcReader.(*os.File).SetReadDeadline(time.Time{})
+	_ = w.transport.SetWriteDeadline(time.Time{})
+	_ = w.transport.SetReadDeadline(time.Time{})
 
 	var ack map[string]any
 	if err := json.Unmarshal(body, &ack); err != nil {
@@ -1004,6 +997,7 @@ func extractChannels(payload map[string]any) (*Channel, *Channel, uintptr) {
 	if rawRetCh, ok := payload["return_channel"]; ok {
 		if h := castToHandle(rawRetCh); h != 0 {
 			retHandle = h
+			// getHandleValue returns nil if invalid.
 			if obj := getHandleValue(h); obj != nil {
 				if ch, ok := obj.(*Channel); ok {
 					retCh = ch

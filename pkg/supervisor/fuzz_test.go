@@ -51,11 +51,11 @@ func FuzzPacketReading(f *testing.F) {
 			_ = w.Close()
 		}()
 
-		// Setup minimal Worker
+		// Setup minimal Worker with Transport
 		worker := &phpWorker{
 			id:        1,
-			ipcReader: r,
-			ipcWriter: w,
+			transport: NewTransport(r, w),
+			// Process is nil, which is handled by killWorker
 		}
 
 		// Setup Minimal Pool
@@ -74,8 +74,7 @@ func FuzzPacketReading(f *testing.F) {
 		r_local, w_remote, _ := os.Pipe()
 		r_remote, w_local, _ := os.Pipe()
 
-		worker.ipcReader = r_local
-		worker.ipcWriter = w_local
+		worker.transport = NewTransport(r_local, w_local)
 
 		go func() {
 			if _, err := w_remote.Write(data); err != nil {
@@ -98,7 +97,6 @@ func FuzzPacketReading(f *testing.F) {
 
 		p.executeOnWorker(worker, payload, nil)
 
-		_ = w_local.Close()
-		_ = r_local.Close()
+		_ = worker.transport.Close()
 	})
 }

@@ -336,11 +336,14 @@ func cancel_wrapper(chHandle C.uintptr_t) C.bool {
 
 //export await_wrapper
 func await_wrapper(chHandle C.uintptr_t, timeout C.double) *C.char {
+	// Safe Type Assertion: Channel
 	obj := getGoObject(uintptr(chHandle))
-	if obj == nil {
+	ch, ok := obj.(*supervisor.Channel)
+	if !ok {
+		log.Printf("[Pogo] Error: await_wrapper called on non-Channel handle %d", uintptr(chHandle))
 		return nil
 	}
-	ch := obj.(*supervisor.Channel)
+
 	select {
 	case val, ok := <-ch.Ch:
 		if !ok {
@@ -365,11 +368,14 @@ func await_wrapper(chHandle C.uintptr_t, timeout C.double) *C.char {
 
 //export poll_wrapper
 func poll_wrapper(chHandle C.uintptr_t) *C.char {
+	// Safe Type Assertion: Channel
 	obj := getGoObject(uintptr(chHandle))
-	if obj == nil {
+	ch, ok := obj.(*supervisor.Channel)
+	if !ok {
+		log.Printf("[Pogo] Error: poll_wrapper called on non-Channel handle %d", uintptr(chHandle))
 		return nil
 	}
-	ch := obj.(*supervisor.Channel)
+
 	select {
 	case val, ok := <-ch.Ch:
 		if !ok {
@@ -388,6 +394,7 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 	// Optimization: Fast path for single channel select (common case)
 	if count == 1 {
 		h := handleSlice[0]
+		// Only enter fast path if it is a valid channel
 		if h != 0 {
 			obj := getGoObject(h)
 			if ch, ok := obj.(*supervisor.Channel); ok {
@@ -420,10 +427,13 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 					}
 					return C.select_result{index: 0, value: C.CString(val), status: 0}
 				}
+			} else {
+				log.Printf("[Pogo] Warning: select_wrapper fast path ignored non-Channel handle %d", h)
+				// Fallthrough to Slow Path
 			}
+		} else {
+			// Handle is 0. Fallthrough to Slow Path
 		}
-		// If invalid handle/not a channel, assume default case which triggers immediately
-		return C.select_result{index: 0, value: C.CString(""), status: 0}
 	}
 
 	// Slow path: Reflection based select
@@ -431,13 +441,17 @@ func select_wrapper(handles *C.uintptr_t, count C.int, timeoutSeconds C.double) 
 
 	for _, h := range handleSlice {
 		if h == 0 {
-			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
+			// Fix: Treat zero handle as invalid/ignored (Nil Channel), not Default
+			log.Printf("[Pogo] Warning: select_wrapper ignored zero handle")
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv})
 		} else {
 			obj := getGoObject(h)
 			if ch, ok := obj.(*supervisor.Channel); ok {
 				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch.Ch)})
 			} else {
-				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
+				log.Printf("[Pogo] Warning: select_wrapper ignored non-Channel handle %d", h)
+				// Use SelectRecv with Zero value Chan to ignore this case
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv})
 			}
 		}
 	}
@@ -482,6 +496,7 @@ func registerGoObject(obj interface{}) C.uintptr_t { return C.uintptr_t(cgo.NewH
 //export removeGoObject
 func removeGoObject(handle C.uintptr_t) {
 	h := uintptr(handle)
+	// getGoObject will return nil if handle is invalid
 	obj := getGoObject(h)
 
 	if obj != nil {
@@ -525,32 +540,74 @@ func create_Channel_object() C.uintptr_t {
 
 //export add_wrapper
 func add_wrapper(handle C.uintptr_t, delta int64) {
-	getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Add(delta)
+	obj := getGoObject(uintptr(handle))
+	if wg, ok := obj.(*supervisor.WaitGroup); ok {
+		wg.Add(delta)
+	} else {
+		log.Printf("[Pogo] Error: add_wrapper called on non-WaitGroup handle %d", uintptr(handle))
+	}
 }
 
 //export done_wrapper
-func done_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Done() }
+func done_wrapper(handle C.uintptr_t) {
+	obj := getGoObject(uintptr(handle))
+	if wg, ok := obj.(*supervisor.WaitGroup); ok {
+		wg.Done()
+	} else {
+		log.Printf("[Pogo] Error: done_wrapper called on non-WaitGroup handle %d", uintptr(handle))
+	}
+}
 
 //export wait_wrapper
-func wait_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.WaitGroup).Wait() }
+func wait_wrapper(handle C.uintptr_t) {
+	obj := getGoObject(uintptr(handle))
+	if wg, ok := obj.(*supervisor.WaitGroup); ok {
+		wg.Wait()
+	} else {
+		log.Printf("[Pogo] Error: wait_wrapper called on non-WaitGroup handle %d", uintptr(handle))
+	}
+}
 
 //export init_wrapper
 func init_wrapper(handle C.uintptr_t, capacity int64) {
-	getGoObject(uintptr(handle)).(*supervisor.Channel).Init(capacity)
+	obj := getGoObject(uintptr(handle))
+	if ch, ok := obj.(*supervisor.Channel); ok {
+		ch.Init(capacity)
+	} else {
+		log.Printf("[Pogo] Error: init_wrapper called on non-Channel handle %d", uintptr(handle))
+	}
 }
 
 //export push_wrapper
 func push_wrapper(handle C.uintptr_t, value *C.char, valueLen C.int) {
-	getGoObject(uintptr(handle)).(*supervisor.Channel).Push(C.GoStringN(value, valueLen))
+	obj := getGoObject(uintptr(handle))
+	if ch, ok := obj.(*supervisor.Channel); ok {
+		ch.Push(C.GoStringN(value, valueLen))
+	} else {
+		log.Printf("[Pogo] Error: push_wrapper called on non-Channel handle %d", uintptr(handle))
+	}
 }
 
 //export pop_wrapper
 func pop_wrapper(handle C.uintptr_t) *C.char {
-	return C.CString(getGoObject(uintptr(handle)).(*supervisor.Channel).Pop())
+	obj := getGoObject(uintptr(handle))
+	if ch, ok := obj.(*supervisor.Channel); ok {
+		return C.CString(ch.Pop())
+	} else {
+		log.Printf("[Pogo] Error: pop_wrapper called on non-Channel handle %d", uintptr(handle))
+		return C.CString("")
+	}
 }
 
 //export close_wrapper
-func close_wrapper(handle C.uintptr_t) { getGoObject(uintptr(handle)).(*supervisor.Channel).Close() }
+func close_wrapper(handle C.uintptr_t) {
+	obj := getGoObject(uintptr(handle))
+	if ch, ok := obj.(*supervisor.Channel); ok {
+		ch.Close()
+	} else {
+		log.Printf("[Pogo] Error: close_wrapper called on non-Channel handle %d", uintptr(handle))
+	}
+}
 
 func convertPayloadToGo(payload unsafe.Pointer) (map[string]any, error) {
 	if payload == nil {

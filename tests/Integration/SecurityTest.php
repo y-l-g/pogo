@@ -13,7 +13,7 @@ class SecurityTest extends TestCase
         \Pogo\start_worker_pool("worker/job_runner.php", 1, 1);
 
         $this->expectException(WorkerException::class);
-        $this->expectExceptionMessage("Response too large");
+        $this->expectExceptionMessage("payload too large");
 
         // Job returns 20MB, limit is 16MB
         \Pogo\async('LargePayloadJob', [])->await(5.0);

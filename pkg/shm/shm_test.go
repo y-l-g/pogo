@@ -21,7 +21,7 @@ func TestSharedMemory_RingBufferStrategy(t *testing.T) {
 
 	// 2. Alloc 1: 30 bytes.
 	// Tail: 8 -> 38.
-	off1, err := shm.Allocate(30)
+	off1, err := shm.Allocate(30, 1)
 	if err != nil {
 		t.Fatalf("Alloc 1 failed: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestSharedMemory_RingBufferStrategy(t *testing.T) {
 
 	// 3. Alloc 2: 50 bytes.
 	// Tail: 38 -> 88.
-	off2, err := shm.Allocate(50)
+	off2, err := shm.Allocate(50, 1)
 	if err != nil {
 		t.Fatalf("Alloc 2 failed: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSharedMemory_RingBufferStrategy(t *testing.T) {
 	// Pad needed: 100-88 = 12 bytes.
 	// Total needed: 20 + 12 = 32 bytes.
 	// Available: 20 bytes. -> Fail.
-	_, err = shm.Allocate(20)
+	_, err = shm.Allocate(20, 1)
 	if err == nil {
 		t.Fatal("Expected Alloc 3 to fail due to fragmentation/full")
 	}
@@ -68,7 +68,7 @@ func TestSharedMemory_RingBufferStrategy(t *testing.T) {
 	// Alloc: 20 bytes at 0. New Tail=120.
 	// Total consumed: 12(pad) + 20(data) = 32.
 	// Free space was 50. 32 <= 50. OK.
-	off3, err := shm.Allocate(20)
+	off3, err := shm.Allocate(20, 1)
 	if err != nil {
 		t.Fatalf("Alloc 3 failed after free: %v", err)
 	}
@@ -102,8 +102,42 @@ func TestSharedMemory_BoundsCheck(t *testing.T) {
 	shm, _ := NewSharedMemory(128)
 	defer func() { _ = shm.Close() }()
 
-	_, err := shm.Allocate(200)
+	_, err := shm.Allocate(200, 1)
 	if err == nil {
 		t.Error("Expected error for allocation larger than SHM size")
+	}
+}
+
+func TestSharedMemory_OrphanCollection(t *testing.T) {
+	t.Parallel()
+	shm, _ := NewSharedMemory(1024)
+	defer func() { _ = shm.Close() }()
+
+	// Alloc 1 (Worker 1)
+	off1, _ := shm.Allocate(100, 1)
+	// Alloc 2 (Worker 2)
+	off2, _ := shm.Allocate(100, 2)
+	// Alloc 3 (Worker 1)
+	off3, _ := shm.Allocate(100, 1)
+
+	// Free all by Worker 1
+	shm.FreeByWorkerID(1)
+
+	// Check Alloc 1 (freed)
+	if meta, ok := shm.lookup[off1]; ok {
+		t.Error("Expected Alloc 1 to be removed from lookup")
+		if !meta.Freed {
+			t.Error("Alloc 1 should be marked freed")
+		}
+	}
+
+	// Check Alloc 2 (kept)
+	if _, ok := shm.lookup[off2]; !ok {
+		t.Error("Expected Alloc 2 to persist")
+	}
+
+	// Check Alloc 3 (freed)
+	if _, ok := shm.lookup[off3]; ok {
+		t.Error("Expected Alloc 3 to be removed from lookup")
 	}
 }

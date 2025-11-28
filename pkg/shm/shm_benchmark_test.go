@@ -19,7 +19,7 @@ func BenchmarkAllocate(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		offset, err := shm.Allocate(payloadSize)
+		offset, err := shm.Allocate(payloadSize, 1)
 		if err != nil {
 			// If buffer fills up (unlikely with just 1KB in benchmarks unless N is huge without free),
 			// we free everything to reset.
@@ -47,7 +47,7 @@ func BenchmarkAllocateParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			offset, err := shm.Allocate(payloadSize)
+			offset, err := shm.Allocate(payloadSize, 1)
 			if err != nil {
 				// In parallel, we can't easily fatal without stopping others,
 				// but let's assume 64MB is enough for the benchmark window.
@@ -69,7 +69,7 @@ func BenchmarkWriteAt(b *testing.B) {
 
 	data := make([]byte, 4096) // 4KB
 	_, _ = rand.Read(data)
-	offset, _ := shm.Allocate(len(data))
+	offset, _ := shm.Allocate(len(data), 1)
 
 	b.SetBytes(int64(len(data)))
 	b.ResetTimer()

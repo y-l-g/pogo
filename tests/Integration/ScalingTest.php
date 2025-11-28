@@ -3,36 +3,47 @@
 namespace Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use Pogo\Runtime\Pool;
 
 class ScalingTest extends TestCase
 {
     public function testAutoScalingUp(): void
     {
         // Start with Min 1, Max 4
-        \Pogo\start_worker_pool("worker/job_runner.php", 1, 4, 0, ['scale_latency_ms' => 10]);
+        $pool = new Pool("worker/job_runner.php", 1, 4, 0, ['scale_latency_ms' => 10]);
+        $pool->start();
 
-        // Dispatch 4 concurrent slow jobs
-        $futures = [];
-        for ($i = 0; $i < 4; $i++) {
-            $futures[] = \Pogo\async('AsyncJob', ['sleep' => 500, 'data' => $i]);
+        try {
+            // Dispatch 4 concurrent slow jobs
+            $futures = [];
+            for ($i = 0; $i < 4; $i++) {
+                $futures[] = $pool->submit('AsyncJob', ['sleep' => 500, 'data' => $i]);
+            }
+
+            foreach ($futures as $f) {
+                $f->await();
+            }
+
+            // Check stats using the specific Pool ID
+            $stats = \Pogo\get_pool_stats($pool->id());
+
+            // Assert that the pool scaled to at least 4 workers to handle the concurrent load
+            $this->assertEquals(4, $stats['peak_workers'], "Should have scaled to 4 workers");
+        } finally {
+            $pool->shutdown();
         }
-
-        foreach ($futures as $f) {
-            $f->await();
-        }
-
-        // Check stats
-        $stats = \Pogo\get_pool_stats(0);
-        $this->assertEquals(4, $stats['peak_workers'], "Should have scaled to 4 workers");
     }
 
     public function testScaleDown(): void
     {
-        // Note: Testing time-based scale down in unit tests is slow.
-        // We verified logic in manual tests. Here we ensure basic stability.
-        \Pogo\start_worker_pool("worker/job_runner.php", 1, 4);
+        $pool = new Pool("worker/job_runner.php", 1, 4);
+        $pool->start();
 
-        $f = \Pogo\async('AsyncJob', ['sleep' => 10, 'data' => 'quick']);
-        $this->assertEquals("Processed: quick", trim($f->await()));
+        try {
+            $f = $pool->submit('AsyncJob', ['sleep' => 10, 'data' => 'quick']);
+            $this->assertEquals("Processed: quick", trim($f->await()));
+        } finally {
+            $pool->shutdown();
+        }
     }
 }

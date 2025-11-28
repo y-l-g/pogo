@@ -47,7 +47,7 @@ class ProtocolTest extends TestCase
     public function testMaxPayloadDosProtection(): void
     {
         $this->expectException(WorkerException::class);
-        $this->expectExceptionMessage('Response too large');
+        $this->expectExceptionMessage('payload too large');
 
         // LargePayloadJob returns 20MB, limit is 16MB
         $f = \Pogo\async('LargePayloadJob', []);

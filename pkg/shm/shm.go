@@ -12,6 +12,7 @@ type AllocationMeta struct {
 	Size      int64
 	Freed     bool
 	IsPadding bool
+	WorkerID  int // ID of the worker owning this allocation
 }
 
 // SharedMemory implements a Ring Buffer backed by a Memory-Mapped File.
@@ -114,7 +115,7 @@ func (s *SharedMemory) compress() {
 }
 
 // Allocate reserves a contiguous block in the ring buffer.
-func (s *SharedMemory) Allocate(length int) (int64, error) {
+func (s *SharedMemory) Allocate(length int, workerID int) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -147,6 +148,7 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 			Size:      pad,
 			Freed:     true,
 			IsPadding: true,
+			WorkerID:  -1, // Padding belongs to no one
 		}
 		s.queue = append(s.queue, padMeta)
 		s.tail += pad
@@ -163,9 +165,10 @@ func (s *SharedMemory) Allocate(length int) (int64, error) {
 	// 5. Commit
 	offset := s.tail
 	meta := &AllocationMeta{
-		Offset: offset,
-		Size:   len64,
-		Freed:  false,
+		Offset:   offset,
+		Size:     len64,
+		Freed:    false,
+		WorkerID: workerID,
 	}
 
 	s.queue = append(s.queue, meta)
@@ -184,6 +187,22 @@ func (s *SharedMemory) Free(physOffset int64) {
 		delete(s.lookup, physOffset)
 		s.compress()
 	}
+}
+
+// FreeByWorkerID reclaims all allocations owned by a specific worker.
+// This is O(N) where N is the number of active allocations.
+// It is intended for cleanup during worker crash/shutdown.
+func (s *SharedMemory) FreeByWorkerID(workerID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for physOffset, meta := range s.lookup {
+		if meta.WorkerID == workerID {
+			meta.Freed = true
+			delete(s.lookup, physOffset)
+		}
+	}
+	s.compress()
 }
 
 func (s *SharedMemory) WriteAt(offset int64, data []byte) error {
