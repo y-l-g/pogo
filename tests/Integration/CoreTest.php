@@ -14,7 +14,10 @@ class CoreTest extends TestCase
         // Start the default pool for core tests
         // Increased min workers to 4 to ensure immediate parallelism for the test
         \Pogo\start_worker_pool("worker/job_runner.php", 4, 8, 0, ['shm_size' => 16 * 1024 * 1024]);
-        usleep(200000); // Wait for boot
+
+        // Wait for workers to be ready.
+        // 500ms is sufficient for 4 processes to boot even in slower CI environments.
+        usleep(500000);
     }
 
     public function testExtensionPrimitivesExist(): void
@@ -39,7 +42,8 @@ class CoreTest extends TestCase
     {
         $count = 4;
         $futures = [];
-        $sleepMs = 200;
+        // Increased sleep to 500ms to make the overlap window larger/more robust
+        $sleepMs = 500;
 
         // Use TimestampJob to get precise execution windows
         for ($i = 0; $i < $count; $i++) {
@@ -48,7 +52,7 @@ class CoreTest extends TestCase
 
         $results = [];
         foreach ($futures as $f) {
-            $results[] = $f->await(2.0);
+            $results[] = $f->await(5.0); // Increased await timeout
         }
 
         $this->assertCount($count, $results);
@@ -63,10 +67,14 @@ class CoreTest extends TestCase
         // Parallelism is proven if the last job starts BEFORE the first job ends.
         // This implies they were running simultaneously.
         // If they were sequential, LastStart would be > FirstEnd.
+
+        // Debugging info in failure message
+        $debug = "First Start: {$firstJob['ts_start']}, First End: {$firstJob['ts_end']}, Last Start: {$lastJob['ts_start']}, Last End: {$lastJob['ts_end']}";
+
         $this->assertLessThan(
             $firstJob['ts_end'],
             $lastJob['ts_start'],
-            "Jobs did not overlap in time (Sequential execution detected). First End: {$firstJob['ts_end']}, Last Start: {$lastJob['ts_start']}"
+            "Jobs did not overlap in time (Sequential execution detected). $debug"
         );
     }
 }

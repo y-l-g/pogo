@@ -7,7 +7,6 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
 ## Table of Contents
 
 - [Introduction](#introduction)
-- [Installation & Setup](#installation--setup)
 - [Usage Examples](#usage-examples)
 - [API Reference](#api-reference)
 - [Architecture & Tech Stack](#architecture--tech-stack)

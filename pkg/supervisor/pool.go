@@ -11,7 +11,6 @@ import (
 	"os"
 	"reflect"
 	"runtime/cgo"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -69,44 +68,6 @@ type PoolConfig struct {
 	TestHooks    *TestHooks
 }
 
-type LatencyTracker struct {
-	mu      sync.Mutex
-	samples [100]int64
-	idx     int
-	count   int
-}
-
-func (l *LatencyTracker) Add(ms int64) {
-	l.mu.Lock()
-	l.samples[l.idx] = ms
-	l.idx = (l.idx + 1) % 100
-	if l.count < 100 {
-		l.count++
-	}
-	l.mu.Unlock()
-}
-
-func (l *LatencyTracker) P95() int64 {
-	l.mu.Lock()
-	var snapshot [100]int64
-	count := l.count
-	copy(snapshot[:], l.samples[:])
-	l.mu.Unlock()
-
-	if count == 0 {
-		return 0
-	}
-
-	activeSlice := snapshot[:count]
-	sort.Slice(activeSlice, func(i, j int) bool { return activeSlice[i] < activeSlice[j] })
-
-	p95Index := int(float64(count) * 0.95)
-	if p95Index >= count {
-		p95Index = count - 1
-	}
-	return activeSlice[p95Index]
-}
-
 type Pool struct {
 	ID         int64
 	entrypoint string
@@ -122,11 +83,8 @@ type Pool struct {
 	peakWorkers     int32
 	workerIdCounter int32
 
-	spawnMu      sync.Mutex // Protects lastSpawn and scaling logic
-	lastSpawn    time.Time
-	scaleUpVotes int
-
-	latency LatencyTracker
+	// Scaler handles logic for spawning/killing decisions
+	scaler *AutoScaler
 
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -155,7 +113,6 @@ func NewPool(id int64) *Pool {
 		registry:    make(map[string]func(map[string]any)),
 		tasks:       make(chan GoTask, 100),
 		workersList: make(map[int]*phpWorker),
-		lastSpawn:   time.Now(),
 	}
 
 	p.mpHandle.MapType = reflect.TypeOf(map[string]any(nil))
@@ -206,13 +163,18 @@ func (p *Pool) GetStats() map[string]any {
 		total = len(p.workerSemaphore)
 	}
 
+	p95 := int64(0)
+	if p.scaler != nil {
+		p95 = p.scaler.P95()
+	}
+
 	stats := map[string]any{
 		"active_workers": atomic.LoadInt64(&p.activeGoWorkers),
 		"total_workers":  total,
 		"peak_workers":   atomic.LoadInt32(&p.peakWorkers),
 		"queue_depth":    len(p.tasks),
 		"map_size":       p.CancellationsLen(),
-		"p95_wait_ms":    p.latency.P95(),
+		"p95_wait_ms":    p95,
 	}
 
 	p.shmMu.RLock()
@@ -273,6 +235,8 @@ func (p *Pool) Start(entrypoint string, min, max, maxJobs int, cfg PoolConfig) {
 		p.maxWorkers = int32(max)
 		p.maxJobs = int32(maxJobs)
 		p.config = cfg
+
+		p.scaler = NewAutoScaler(p.config.ScaleLatency)
 
 		if p.minWorkers <= 0 {
 			p.minWorkers = 1
@@ -339,33 +303,20 @@ func (p *Pool) checkScaling() {
 	queueDepth := len(p.tasks)
 	MetricQueueDepth(p.ID, queueDepth)
 
-	current := int32(len(p.workerSemaphore))
-	idle := int(current) - int(atomic.LoadInt64(&p.activeGoWorkers))
+	totalWorkers := len(p.workerSemaphore)
+	activeWorkers := int(atomic.LoadInt64(&p.activeGoWorkers))
+	idleWorkers := totalWorkers - activeWorkers
+	availableWorkers := len(p.workers)
 
-	latencyP95 := p.latency.P95()
+	action := p.scaler.Assess(queueDepth, idleWorkers, totalWorkers, int(p.minWorkers), int(p.maxWorkers), availableWorkers)
 
-	needsScaleUp := queueDepth > idle && latencyP95 > p.config.ScaleLatency && current < p.maxWorkers
-	if needsScaleUp {
-		p.scaleUpVotes++
-	} else {
-		p.scaleUpVotes = 0
-	}
-
-	p.spawnMu.Lock()
-	shouldSpawn := p.scaleUpVotes >= 2 && time.Since(p.lastSpawn) > 2*time.Second
-	p.spawnMu.Unlock()
-
-	if shouldSpawn {
-		p.spawnMu.Lock()
-		p.lastSpawn = time.Now()
-		p.spawnMu.Unlock()
-
-		log.Printf("[Pool %d] Scaling UP (P95: %dms, Queue: %d)", p.ID, latencyP95, queueDepth)
+	switch action {
+	case ActionScaleUp:
+		log.Printf("[Pool %d] Scaling UP (Queue: %d, Idle: %d)", p.ID, queueDepth, idleWorkers)
 		p.trySpawnWorker()
-		p.scaleUpVotes = 0
-	}
 
-	if queueDepth == 0 && current > p.minWorkers && idle > 1 && len(p.workers) > int(p.minWorkers) {
+	case ActionScaleDown:
+		// Pool handles the actual victim selection
 		select {
 		case w := <-p.workers:
 			if time.Since(w.getLastActive()) > 30*time.Second {
@@ -451,7 +402,9 @@ func (p *Pool) goWorkerLoop() {
 	for {
 		select {
 		case task := <-p.tasks:
-			p.latency.Add(time.Since(task.EnqueuedAt).Milliseconds())
+			if p.scaler != nil {
+				p.scaler.RecordLatency(time.Since(task.EnqueuedAt))
+			}
 
 			if workerFunc, ok := p.registry[task.Name]; ok {
 				atomic.AddInt64(&p.activeGoWorkers, 1)
