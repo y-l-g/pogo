@@ -400,8 +400,7 @@ The `pogo.go` layer no longer relies on global state. A thread-safe `Manager` st
 
 The PHP Extension (`pogo.c`) has been stripped of business logic ("Dumb C" pattern).
 
-- **Raw Data Flow:** It no longer decodes JSON or inspects payloads. It simply passes raw strings between PHP and Go.
-- **Safety:** This significantly reduces the surface area for C-based memory errors and segmentation faults. All complex data processing is delegated to PHP userland or Go.
+- **Raw Data Flow:** It simply passes raw strings between PHP and Go.
 - **O(1) Select:** The `Pogo\select` implementation constructs a flat array of handles in C before passing them to Go, avoiding PHP HashTable iteration inside the Go runtime.
 
 ### Layer D: The Protocol & Transport
@@ -464,17 +463,6 @@ make profile-cpu
 # Memory Allocations
 make profile-mem
 ```
-
----
-
-## Quality Assurance & Testing
-
-1. **Unit Tests (`make test-unit`):** Fast, deterministic tests. Includes `pkg/shm` tests verifying memory safety without spawning processes.
-2. **The "Ouroboros" Torture Test:** A sustained load test pushing data through the Shared Memory Ring Buffer to verify rotation and zero-copy integrity.
-3. **The "Chaos" Torture Test:** A resilience test that intentionally kills (`SIGKILL`, `exit(1)`) active worker processes under load to verify the Supervisor's recovery and orphan collection logic.
-4. **Protocol Fuzzing:** Go fuzz tests ensure the Supervisor does not crash when receiving malformed packets from workers.
-
----
 
 ## The Protocol Specification
 
