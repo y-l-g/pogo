@@ -46,7 +46,7 @@ jobs:
           benchstat main_bench.txt pr_bench.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - uses: actions/github-script@v6
+      - uses: actions/github-script@v8
         env:
           REPORT: ${{ steps.benchstat.outputs.REPORT }}
         with:
