@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767479314870,
+  "lastUpdate": 1767480314417,
   "repoUrl": "https://github.com/y-l-g/pogo",
   "entries": {
     "Benchmark": [
@@ -2574,6 +2574,204 @@ window.BENCHMARK_DATA = {
             "value": 0,
             "unit": "allocs/op",
             "extra": "1870026 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "youenn.legouedec@gmail.com",
+            "name": "y-l-g",
+            "username": "y-l-g"
+          },
+          "committer": {
+            "email": "youenn.legouedec@gmail.com",
+            "name": "y-l-g",
+            "username": "y-l-g"
+          },
+          "distinct": true,
+          "id": "a3a89d212143c3b60d3b82c277123ceb7769eea6",
+          "message": "wip",
+          "timestamp": "2026-01-03T23:44:40+01:00",
+          "tree_id": "e4f4eb60b68682c5c5be002d1f1a4b38fe36c07f",
+          "url": "https://github.com/y-l-g/pogo/commit/a3a89d212143c3b60d3b82c277123ceb7769eea6"
+        },
+        "date": 1767480314025,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkAllocate",
+            "value": 77.01,
+            "unit": "ns/op\t      32 B/op\t       1 allocs/op",
+            "extra": "15473424 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocate - ns/op",
+            "value": 77.01,
+            "unit": "ns/op",
+            "extra": "15473424 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocate - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "15473424 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocate - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "15473424 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocateParallel",
+            "value": 116.8,
+            "unit": "ns/op\t      32 B/op\t       1 allocs/op",
+            "extra": "10493743 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocateParallel - ns/op",
+            "value": 116.8,
+            "unit": "ns/op",
+            "extra": "10493743 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocateParallel - B/op",
+            "value": 32,
+            "unit": "B/op",
+            "extra": "10493743 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkAllocateParallel - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "10493743 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteAt",
+            "value": 98.36,
+            "unit": "ns/op\t41643.51 MB/s\t       0 B/op\t       0 allocs/op",
+            "extra": "21957652 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteAt - ns/op",
+            "value": 98.36,
+            "unit": "ns/op",
+            "extra": "21957652 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteAt - MB/s",
+            "value": 41643.51,
+            "unit": "MB/s",
+            "extra": "21957652 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteAt - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "21957652 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteAt - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "21957652 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/JSON",
+            "value": 3588,
+            "unit": "ns/op\t    1360 B/op\t      36 allocs/op",
+            "extra": "326046 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/JSON - ns/op",
+            "value": 3588,
+            "unit": "ns/op",
+            "extra": "326046 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/JSON - B/op",
+            "value": 1360,
+            "unit": "B/op",
+            "extra": "326046 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/JSON - allocs/op",
+            "value": 36,
+            "unit": "allocs/op",
+            "extra": "326046 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/MsgPack",
+            "value": 698.7,
+            "unit": "ns/op\t     192 B/op\t       1 allocs/op",
+            "extra": "1713024 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/MsgPack - ns/op",
+            "value": 698.7,
+            "unit": "ns/op",
+            "extra": "1713024 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/MsgPack - B/op",
+            "value": 192,
+            "unit": "B/op",
+            "extra": "1713024 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkSerialization/MsgPack - allocs/op",
+            "value": 1,
+            "unit": "allocs/op",
+            "extra": "1713024 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHandleValidation",
+            "value": 405.7,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "3006007 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHandleValidation - ns/op",
+            "value": 405.7,
+            "unit": "ns/op",
+            "extra": "3006007 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHandleValidation - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "3006007 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkHandleValidation - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "3006007 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkInternalBus",
+            "value": 693.3,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "1866498 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkInternalBus - ns/op",
+            "value": 693.3,
+            "unit": "ns/op",
+            "extra": "1866498 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkInternalBus - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "1866498 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkInternalBus - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "1866498 times\n4 procs"
           }
         ]
       }
