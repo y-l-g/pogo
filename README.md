@@ -20,7 +20,6 @@ Unlike PHP Fibers (which provide cooperative multitasking within a single thread
   - [Shared Memory (Ring Buffer)](#layer-e-shared-memory)
 - [Observability & Metrics](#observability--metrics)
 - [Performance Engineering](#performance-engineering)
-- [Quality Assurance & Testing](#quality-assurance--testing)
 - [The Protocol Specification](#the-protocol-specification)
 - [Current Status & Limitations](#current-status--limitations)
 
