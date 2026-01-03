@@ -1,11 +1,12 @@
 module github.com/y-l-g/pogo
 
-go 1.25.0
+go 1.25.4
 
 require (
-	github.com/dunglas/frankenphp v1.10.0
+	github.com/dunglas/frankenphp v1.11.1
+	github.com/prometheus/client_golang v1.23.2
 	github.com/ugorji/go/codec v1.3.1
-	golang.org/x/sys v0.38.0
+	golang.org/x/sys v0.39.0
 )
 
 require (
@@ -15,8 +16,9 @@ require (
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
-	github.com/dunglas/mercure v0.21.2 // indirect
+	github.com/dunglas/mercure v0.21.4 // indirect
 	github.com/dunglas/skipfilter v1.0.0 // indirect
+	github.com/e-dant/watcher/watcher-go v0.0.0-20251208164151-f88ec3b7e146 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gammazero/deque v1.2.0 // indirect
@@ -30,9 +32,8 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.3 // indirect
+	github.com/prometheus/common v0.67.4 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
@@ -46,8 +47,8 @@ require (
 	go.etcd.io/bbolt v1.4.3 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.44.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
