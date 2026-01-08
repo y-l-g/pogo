@@ -6,7 +6,7 @@ require (
 	github.com/dunglas/frankenphp v1.11.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/ugorji/go/codec v1.3.1
-	golang.org/x/sys v0.39.0
+	golang.org/x/sys v0.40.0
 )
 
 require (
