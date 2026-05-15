@@ -44,24 +44,89 @@ func (f *fakeWorkers) NumThreads() int {
 	return f.threads
 }
 
+func testManager(pools map[string]*pool) *manager {
+	return newManager(pools)
+}
+
+func TestDispatchUsesNamedPool(t *testing.T) {
+	defaultWorkers := &fakeWorkers{response: `{"ok":true,"result":"default"}`}
+	apiWorkers := &fakeWorkers{response: `{"ok":true,"result":"api"}`}
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, defaultWorkers, time.Second),
+		"external_api":  newPool("external_api", apiWorkers, time.Second),
+	})
+
+	handle, err := m.dispatch("external_api", "App\\Job", `[]`)
+	if err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+
+	result, err := m.await(handle, time.Second)
+	if err != nil {
+		t.Fatalf("await failed: %v", err)
+	}
+
+	if result != `"api"` {
+		t.Fatalf("unexpected result: %s", result)
+	}
+	if apiWorkers.calls.Load() != 1 {
+		t.Fatalf("expected external_api pool to be used")
+	}
+	if defaultWorkers.calls.Load() != 0 {
+		t.Fatalf("default pool should not have been used")
+	}
+}
+
+func TestUnknownPoolDispatchFails(t *testing.T) {
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{}, time.Second),
+	})
+
+	if _, err := m.dispatch("missing", "App\\Job", `[]`); err == nil {
+		t.Fatal("expected unknown pool error")
+	}
+}
+
+func TestHandlesAreGloballyUniqueAcrossPools(t *testing.T) {
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{response: `{"ok":true,"result":1}`}, time.Second),
+		"cpu":           newPool("cpu", &fakeWorkers{response: `{"ok":true,"result":2}`}, time.Second),
+	})
+
+	a, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
+	if err != nil {
+		t.Fatalf("dispatch default failed: %v", err)
+	}
+	b, err := m.dispatch("cpu", "App\\Job", `[]`)
+	if err != nil {
+		t.Fatalf("dispatch cpu failed: %v", err)
+	}
+
+	if a == b {
+		t.Fatal("handles from different pools must be globally unique")
+	}
+}
+
 func TestAwaitTimeoutDeletesHandleAndLateResultDoesNotBlock(t *testing.T) {
 	workers := &fakeWorkers{
 		delay:    50 * time.Millisecond,
 		response: `{"ok":true,"result":"late"}`,
 		threads:  1,
 	}
-	p := newPool(workers, time.Second)
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, workers, time.Second),
+	})
 
-	handle, err := p.dispatch("App\\SlowJob", `[]`)
+	handle, err := m.dispatch(defaultPoolName, "App\\SlowJob", `[]`)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	if _, err := p.await(handle, time.Millisecond); err == nil {
+	if _, err := m.await(handle, time.Millisecond); err == nil {
 		t.Fatal("expected await timeout")
 	}
 
-	if p.has(handle) {
+	if m.has(handle) {
 		t.Fatal("timed out handle was not deleted")
 	}
 
@@ -75,16 +140,18 @@ func TestCancelDeletesHandleAndCancelsWorkerContext(t *testing.T) {
 		response: `{"ok":true,"result":"late"}`,
 		canceled: canceled,
 	}
-	p := newPool(workers, time.Second)
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, workers, time.Second),
+	})
 
-	handle, err := p.dispatch("App\\SlowJob", `[]`)
+	handle, err := m.dispatch(defaultPoolName, "App\\SlowJob", `[]`)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	p.cancel(handle)
+	m.cancel(handle)
 
-	if p.has(handle) {
+	if m.has(handle) {
 		t.Fatal("canceled handle was not deleted")
 	}
 
@@ -96,39 +163,61 @@ func TestCancelDeletesHandleAndCancelsWorkerContext(t *testing.T) {
 }
 
 func TestAwaitUnknownHandleFails(t *testing.T) {
-	p := newPool(&fakeWorkers{}, time.Second)
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{}, time.Second),
+	})
 
-	if _, err := p.await(42, time.Millisecond); err == nil {
+	if _, err := m.await(42, time.Millisecond); err == nil {
 		t.Fatal("expected unknown handle error")
 	}
 }
 
 func TestAwaitSameHandleTwiceFails(t *testing.T) {
-	p := newPool(&fakeWorkers{response: `{"ok":true,"result":123}`}, time.Second)
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{response: `{"ok":true,"result":123}`}, time.Second),
+	})
 
-	handle, err := p.dispatch("App\\Job", `[]`)
+	handle, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	if result, err := p.await(handle, time.Second); err != nil || result != "123" {
+	if result, err := m.await(handle, time.Second); err != nil || result != "123" {
 		t.Fatalf("unexpected first await result=%q err=%v", result, err)
 	}
 
-	if _, err := p.await(handle, time.Second); err == nil {
+	if _, err := m.await(handle, time.Second); err == nil {
 		t.Fatal("expected second await to fail")
 	}
 }
 
 func TestWorkerErrorPropagates(t *testing.T) {
-	p := newPool(&fakeWorkers{err: errors.New("worker failed")}, time.Second)
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{err: errors.New("worker failed")}, time.Second),
+	})
 
-	handle, err := p.dispatch("App\\Job", `[]`)
+	handle, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
 
-	if _, err := p.await(handle, time.Second); err == nil || err.Error() != "worker failed" {
+	if _, err := m.await(handle, time.Second); err == nil || err.Error() != "worker failed" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPoolSizeUsesSelectedPool(t *testing.T) {
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{threads: 2}, time.Second),
+		"external_api":  newPool("external_api", &fakeWorkers{threads: 7}, time.Second),
+	})
+
+	p, err := m.pool("external_api")
+	if err != nil {
+		t.Fatalf("pool lookup failed: %v", err)
+	}
+
+	if p.workers.NumThreads() != 7 {
+		t.Fatalf("unexpected pool size: %d", p.workers.NumThreads())
 	}
 }

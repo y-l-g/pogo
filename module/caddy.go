@@ -18,11 +18,16 @@ func init() {
 }
 
 type Pogo struct {
+	Pools []PoolConfig `json:"pools,omitempty"`
+
+	manager *manager
+}
+
+type PoolConfig struct {
+	Name       string         `json:"name,omitempty"`
 	Worker     string         `json:"worker,omitempty"`
 	NumThreads int            `json:"num_threads,omitempty"`
 	MaxWait    caddy.Duration `json:"max_wait,omitempty"`
-
-	pool *pool
 }
 
 func (Pogo) CaddyModule() caddy.ModuleInfo {
@@ -33,34 +38,65 @@ func (Pogo) CaddyModule() caddy.ModuleInfo {
 }
 
 func (p *Pogo) Provision(_ caddy.Context) error {
-	if p.Worker == "" {
-		return fmt.Errorf("pogo worker is required")
+	if err := validatePoolConfigs(p.Pools); err != nil {
+		return err
 	}
 
-	maxWait := time.Duration(p.MaxWait)
-	if maxWait <= 0 {
-		maxWait = 30 * time.Second
+	pools := make(map[string]*pool, len(p.Pools))
+	for _, cfg := range p.Pools {
+		maxWait := time.Duration(cfg.MaxWait)
+		if maxWait <= 0 {
+			maxWait = 30 * time.Second
+		}
+
+		workers := frankenphpCaddy.RegisterWorkers("m#Pogo/"+cfg.Name, cfg.Worker, cfg.NumThreads)
+		pools[cfg.Name] = newPool(cfg.Name, workers, maxWait)
 	}
 
-	workers := frankenphpCaddy.RegisterWorkers("m#Pogo", p.Worker, p.NumThreads)
-	p.pool = newPool(workers, maxWait)
+	p.manager = newManager(pools)
 
-	globalPoolMu.Lock()
-	globalPool = p.pool
-	globalPoolMu.Unlock()
+	globalManagerMu.Lock()
+	globalManager = p.manager
+	globalManagerMu.Unlock()
+
+	return nil
+}
+
+func validatePoolConfigs(configs []PoolConfig) error {
+	if len(configs) == 0 {
+		return fmt.Errorf("pogo requires at least one pool")
+	}
+
+	seen := make(map[string]struct{}, len(configs))
+	for _, cfg := range configs {
+		if cfg.Name == "" {
+			return fmt.Errorf("pogo pool name is required")
+		}
+		if cfg.Worker == "" {
+			return fmt.Errorf("pogo pool %q worker is required", cfg.Name)
+		}
+		if _, exists := seen[cfg.Name]; exists {
+			return fmt.Errorf("duplicate pogo pool %q", cfg.Name)
+		}
+		seen[cfg.Name] = struct{}{}
+	}
+
+	if _, ok := seen[defaultPoolName]; !ok {
+		return fmt.Errorf("pogo requires a %q pool", defaultPoolName)
+	}
 
 	return nil
 }
 
 func (p *Pogo) Cleanup() error {
-	globalPoolMu.Lock()
-	if globalPool == p.pool {
-		globalPool = nil
+	globalManagerMu.Lock()
+	if globalManager == p.manager {
+		globalManager = nil
 	}
-	globalPoolMu.Unlock()
+	globalManagerMu.Unlock()
 
-	if p.pool != nil {
-		p.pool.close()
+	if p.manager != nil {
+		p.manager.close()
 	}
 
 	return nil
@@ -70,29 +106,12 @@ func (p *Pogo) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {
 			switch d.Val() {
-			case "worker":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				p.Worker = d.Val()
-			case "num_threads":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				n, err := strconv.Atoi(d.Val())
+			case "pool":
+				cfg, err := unmarshalPool(d)
 				if err != nil {
-					return d.WrapErr(err)
+					return err
 				}
-				p.NumThreads = n
-			case "max_wait":
-				if !d.NextArg() {
-					return d.ArgErr()
-				}
-				duration, err := caddy.ParseDuration(d.Val())
-				if err != nil {
-					return d.WrapErr(err)
-				}
-				p.MaxWait = caddy.Duration(duration)
+				p.Pools = append(p.Pools, cfg)
 			default:
 				return d.Errf(`unrecognized subdirective "%s"`, d.Val())
 			}
@@ -100,6 +119,51 @@ func (p *Pogo) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 
 	return nil
+}
+
+func unmarshalPool(d *caddyfile.Dispenser) (PoolConfig, error) {
+	cfg := PoolConfig{}
+
+	if !d.NextArg() {
+		return cfg, d.ArgErr()
+	}
+	cfg.Name = d.Val()
+
+	if d.NextArg() {
+		return cfg, d.Errf(`too many arguments for "pool": %s`, d.Val())
+	}
+
+	for d.NextBlock(1) {
+		switch d.Val() {
+		case "worker":
+			if !d.NextArg() {
+				return cfg, d.ArgErr()
+			}
+			cfg.Worker = d.Val()
+		case "num_threads":
+			if !d.NextArg() {
+				return cfg, d.ArgErr()
+			}
+			n, err := strconv.Atoi(d.Val())
+			if err != nil {
+				return cfg, d.WrapErr(err)
+			}
+			cfg.NumThreads = n
+		case "max_wait":
+			if !d.NextArg() {
+				return cfg, d.ArgErr()
+			}
+			duration, err := caddy.ParseDuration(d.Val())
+			if err != nil {
+				return cfg, d.WrapErr(err)
+			}
+			cfg.MaxWait = caddy.Duration(duration)
+		default:
+			return cfg, d.Errf(`unrecognized pool subdirective "%s"`, d.Val())
+		}
+	}
+
+	return cfg, nil
 }
 
 func parseGlobalOption(d *caddyfile.Dispenser, _ any) (any, error) {

@@ -2,10 +2,10 @@
 
 Request-scoped parallel PHP jobs for FrankenPHP.
 
-Pogo lets one PHP request dispatch independent jobs to a FrankenPHP extension
-worker pool, then await their results before returning the response. It is meant
-for fan-out/fan-in work such as remote API calls, independent computations, or
-response fragments.
+Pogo lets one PHP request dispatch independent jobs to isolated FrankenPHP
+extension worker pools, then await their results before returning the response.
+It is meant for fan-out/fan-in work such as remote API calls, independent
+computations, or response fragments.
 
 Pogo is not a queue. Jobs must complete within the request lifecycle. There is
 no persistence, retry, delay, cancellation API, event loop, fiber abstraction, or
@@ -16,17 +16,17 @@ framework adapter in the core package.
 Pogo exposes three native functions:
 
 ```php
-function pogo_dispatch(string $class, array $args = []): int;
+function pogo_dispatch(string $class, array $args = [], string $pool = 'default'): int;
 function pogo_await(int $handle, float $timeout = 5.0): mixed;
-function pogo_pool_size(): int;
+function pogo_pool_size(string $pool = 'default'): int;
 ```
 
 Example:
 
 ```php
-$price = pogo_dispatch(FetchPrice::class, ['sku' => $sku]);
-$stock = pogo_dispatch(FetchStock::class, ['sku' => $sku]);
-$tax   = pogo_dispatch(CalculateTax::class, ['sku' => $sku]);
+$price = pogo_dispatch(FetchPrice::class, ['sku' => $sku], 'external_api');
+$stock = pogo_dispatch(FetchStock::class, ['sku' => $sku], 'external_api');
+$tax   = pogo_dispatch(CalculateTax::class, ['sku' => $sku], 'cpu');
 
 $response = [
     'price' => pogo_await($price, 2.0),
@@ -73,26 +73,43 @@ worker script, as long as it keeps the same payload and response semantics.
 
 ## Caddy
 
-Configure Pogo as a FrankenPHP/Caddy global option:
+Configure Pogo as a FrankenPHP/Caddy global option. A `default` pool is
+required. Add more pools to isolate slow APIs, CPU-heavy work, or critical jobs.
 
 ```caddyfile
 {
     frankenphp
 
     pogo {
-        worker public/pogo-worker.php
-        num_threads 8
-        max_wait 30s
+        pool default {
+            worker public/pogo-worker.php
+            num_threads 8
+            max_wait 30s
+        }
+
+        pool external_api {
+            worker public/pogo-worker.php
+            num_threads 16
+            max_wait 10s
+        }
+
+        pool cpu {
+            worker public/pogo-worker.php
+            num_threads 4
+            max_wait 60s
+        }
     }
 }
 ```
 
-Directives:
+Pool directives:
 
 - `worker`: PHP worker script. Required.
 - `num_threads`: FrankenPHP worker thread count. Optional.
 - `max_wait`: maximum `SendMessage` wait before the job is failed. Optional,
   default `30s`.
+
+Handles are globally unique, so `pogo_await()` does not need the pool name.
 
 ## Packages
 

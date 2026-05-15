@@ -113,15 +113,18 @@ PHP_FUNCTION(pogo_dispatch)
 {
 	char *class_name;
 	size_t class_name_len;
+	char *pool_name = "default";
+	size_t pool_name_len = sizeof("default") - 1;
 	zval *args = NULL;
 	zval empty_args;
 	smart_str json = {0};
 	char *err = NULL;
 
-	ZEND_PARSE_PARAMETERS_START(1, 2)
+	ZEND_PARSE_PARAMETERS_START(1, 3)
 		Z_PARAM_STRING(class_name, class_name_len)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_ARRAY(args)
+		Z_PARAM_STRING(pool_name, pool_name_len)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (args == NULL) {
@@ -155,6 +158,8 @@ PHP_FUNCTION(pogo_dispatch)
 	smart_str_0(&json);
 
 	uint64_t handle = go_pogo_dispatch(
+		pool_name,
+		pool_name_len,
 		class_name,
 		class_name_len,
 		ZSTR_VAL(json.s),
@@ -213,5 +218,13 @@ PHP_FUNCTION(pogo_await)
 
 PHP_FUNCTION(pogo_pool_size)
 {
-	RETURN_LONG((zend_long) go_pogo_pool_size());
+	char *pool_name = "default";
+	size_t pool_name_len = sizeof("default") - 1;
+
+	ZEND_PARSE_PARAMETERS_START(0, 1)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_STRING(pool_name, pool_name_len)
+	ZEND_PARSE_PARAMETERS_END();
+
+	RETURN_LONG((zend_long) go_pogo_pool_size(pool_name, pool_name_len));
 }
