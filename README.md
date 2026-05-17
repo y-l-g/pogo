@@ -11,6 +11,16 @@ Pogo is not a queue. Jobs must complete within the request lifecycle. There is
 no persistence, retry, delay, cancellation API, event loop, fiber abstraction, or
 framework adapter in the core package.
 
+## Production status
+
+Pogo is experimental and its API may change. It is usable for demos and for
+request-scoped fan-out/fan-in jobs where each job can be retried by the caller
+or safely fail with the request.
+
+Do not use it as a durable queue, retry system, scheduler, or long-running task
+runner. Jobs are bounded by the request lifecycle and the configured worker pool
+timeouts.
+
 ## API
 
 Pogo exposes three native functions:
