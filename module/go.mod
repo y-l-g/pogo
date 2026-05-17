@@ -1,6 +1,6 @@
 module github.com/y-l-g/pogo/module
 
-go 1.26.0
+go 1.26.3
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.3
@@ -185,7 +185,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.1 // indirect
 )
-
-replace github.com/dunglas/frankenphp => ../../frankenphp-main
-
-replace github.com/dunglas/frankenphp/caddy => ../../frankenphp-main/caddy

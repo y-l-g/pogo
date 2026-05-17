@@ -124,8 +124,6 @@ FROM dunglas/frankenphp:builder AS builder
 
 COPY --from=caddy:builder /usr/bin/xcaddy /usr/bin/xcaddy
 
-COPY . /src/pogo
-
 RUN CGO_ENABLED=1 \
     XCADDY_SETCAP=1 \
     XCADDY_GO_BUILD_FLAGS="-ldflags='-w -s' -tags=nobadger,nomysql,nopgx" \
@@ -136,7 +134,7 @@ RUN CGO_ENABLED=1 \
         --with github.com/dunglas/frankenphp=./ \
         --with github.com/dunglas/frankenphp/caddy=./caddy  \
         --with github.com/dunglas/caddy-cbrotli \
-        --with github.com/pogo-php/pogo/module=./src/pogo/module
+        --with github.com/y-l-g/pogo/module@main
 
 FROM dunglas/frankenphp AS runner
 
