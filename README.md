@@ -155,5 +155,5 @@ Then copy your app and `Caddyfile` into the runner image as usual.
 
 ## Packages
 
-- Go module: `github.com/pogo-php/pogo/module`
+- Go module: `github.com/y-l-g/pogo/module`
 - Composer package: `pogo/async`
