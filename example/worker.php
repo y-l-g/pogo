@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
-require dirname(__DIR__, 4) . '/vendor/autoload.php';
+if (! function_exists('frankenphp_handle_request')) {
+    fwrite(STDERR, "This script must run as a FrankenPHP worker.\n");
+    exit(1);
+}
 
-use Pogo\JobInterface;
+require __DIR__.'/bootstrap.php';
 
 while (frankenphp_handle_request(static function (mixed $payload): string {
     try {
@@ -12,25 +15,25 @@ while (frankenphp_handle_request(static function (mixed $payload): string {
             $payload = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
         }
 
-        if (!is_array($payload)) {
+        if (! is_array($payload)) {
             throw new RuntimeException('Invalid Pogo payload.');
         }
 
         $class = $payload['class'] ?? null;
         $args = $payload['args'] ?? [];
 
-        if (!is_string($class) || !class_exists($class)) {
+        if (! is_string($class) || ! class_exists($class)) {
             throw new RuntimeException('Invalid or unknown Pogo job class.');
         }
 
-        if (!is_array($args)) {
+        if (! is_array($args)) {
             throw new RuntimeException('Pogo job args must be an array.');
         }
 
         $job = new $class();
 
-        if (!$job instanceof JobInterface) {
-            throw new RuntimeException('Pogo job must implement Pogo\\JobInterface.');
+        if (! is_callable([$job, 'handle'])) {
+            throw new RuntimeException('Pogo job must define handle(array $args).');
         }
 
         return json_encode(

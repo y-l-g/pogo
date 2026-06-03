@@ -12,7 +12,7 @@
 #include "pogo_arginfo.h"
 
 ZEND_BEGIN_MODULE_GLOBALS(pogo)
-	HashTable *active_handles;
+	HashTable *active_tasks;
 ZEND_END_MODULE_GLOBALS(pogo)
 
 ZEND_DECLARE_MODULE_GLOBALS(pogo)
@@ -21,7 +21,7 @@ ZEND_DECLARE_MODULE_GLOBALS(pogo)
 
 static PHP_GINIT_FUNCTION(pogo)
 {
-	pogo_globals->active_handles = NULL;
+	pogo_globals->active_tasks = NULL;
 }
 
 static zend_class_entry *runtime_exception_ce(void)
@@ -47,49 +47,49 @@ PHP_MINIT_FUNCTION(pogo)
 
 PHP_RINIT_FUNCTION(pogo)
 {
-	ALLOC_HASHTABLE(POGO_G(active_handles));
-	zend_hash_init(POGO_G(active_handles), 8, NULL, NULL, 0);
+	ALLOC_HASHTABLE(POGO_G(active_tasks));
+	zend_hash_init(POGO_G(active_tasks), 8, NULL, NULL, 0);
 	return SUCCESS;
 }
 
 PHP_RSHUTDOWN_FUNCTION(pogo)
 {
-	zend_ulong handle;
+	zend_ulong task;
 
-	if (POGO_G(active_handles) == NULL) {
+	if (POGO_G(active_tasks) == NULL) {
 		return SUCCESS;
 	}
 
-	ZEND_HASH_FOREACH_NUM_KEY(POGO_G(active_handles), handle) {
-		go_pogo_cancel((uint64_t) handle);
+	ZEND_HASH_FOREACH_NUM_KEY(POGO_G(active_tasks), task) {
+		go_pogo_cancel((uint64_t) task);
 	} ZEND_HASH_FOREACH_END();
 
-	zend_hash_destroy(POGO_G(active_handles));
-	FREE_HASHTABLE(POGO_G(active_handles));
-	POGO_G(active_handles) = NULL;
+	zend_hash_destroy(POGO_G(active_tasks));
+	FREE_HASHTABLE(POGO_G(active_tasks));
+	POGO_G(active_tasks) = NULL;
 
 	return SUCCESS;
 }
 
-static void track_handle(uint64_t handle)
+static void track_task(uint64_t task)
 {
 	zval dummy;
 
-	if (POGO_G(active_handles) == NULL) {
+	if (POGO_G(active_tasks) == NULL) {
 		return;
 	}
 
 	ZVAL_NULL(&dummy);
-	zend_hash_index_update(POGO_G(active_handles), (zend_ulong) handle, &dummy);
+	zend_hash_index_update(POGO_G(active_tasks), (zend_ulong) task, &dummy);
 }
 
-static void untrack_handle(uint64_t handle)
+static void untrack_task(uint64_t task)
 {
-	if (POGO_G(active_handles) == NULL) {
+	if (POGO_G(active_tasks) == NULL) {
 		return;
 	}
 
-	zend_hash_index_del(POGO_G(active_handles), (zend_ulong) handle);
+	zend_hash_index_del(POGO_G(active_tasks), (zend_ulong) task);
 }
 
 zend_module_entry pogo_module_entry = {
@@ -109,7 +109,7 @@ zend_module_entry pogo_module_entry = {
 	STANDARD_MODULE_PROPERTIES_EX
 };
 
-PHP_FUNCTION(pogo_dispatch)
+PHP_FUNCTION(pogo_spawn)
 {
 	char *class_name;
 	size_t class_name_len;
@@ -157,7 +157,7 @@ PHP_FUNCTION(pogo_dispatch)
 
 	smart_str_0(&json);
 
-	uint64_t handle = go_pogo_dispatch(
+	uint64_t task = go_pogo_spawn(
 		pool_name,
 		pool_name_len,
 		class_name,
@@ -174,27 +174,27 @@ PHP_FUNCTION(pogo_dispatch)
 		RETURN_THROWS();
 	}
 
-	track_handle(handle);
+	track_task(task);
 
-	RETURN_LONG((zend_long) handle);
+	RETURN_LONG((zend_long) task);
 }
 
 PHP_FUNCTION(pogo_await)
 {
-	zend_long handle;
+	zend_long task;
 	double timeout = 5.0;
 	char *err = NULL;
 	char *json = NULL;
 
 	ZEND_PARSE_PARAMETERS_START(1, 2)
-		Z_PARAM_LONG(handle)
+		Z_PARAM_LONG(task)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_DOUBLE(timeout)
 	ZEND_PARSE_PARAMETERS_END();
 
-	untrack_handle((uint64_t) handle);
+	untrack_task((uint64_t) task);
 
-	json = go_pogo_await((uint64_t) handle, timeout, &err);
+	json = go_pogo_await((uint64_t) task, timeout, &err);
 
 	if (err != NULL) {
 		if (json != NULL) {

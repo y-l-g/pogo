@@ -1,0 +1,20 @@
+{
+	frankenphp
+
+	pogo {
+		worker worker.php
+		num_threads 4
+		max_wait 30s
+
+		pool cpu {
+			worker worker.php
+			num_threads 2
+			max_wait 30s
+		}
+	}
+}
+
+:8080 {
+	root * public
+	php_server
+}

@@ -27,11 +27,11 @@ var (
 )
 
 type manager struct {
-	pools     map[string]*pool
-	handles   map[uint64]*pending
-	handlesMu sync.Mutex
-	nextID    atomic.Uint64
-	closed    atomic.Bool
+	pools   map[string]*pool
+	tasks   map[uint64]*task
+	tasksMu sync.Mutex
+	nextID  atomic.Uint64
+	closed  atomic.Bool
 }
 
 type pool struct {
@@ -41,7 +41,7 @@ type pool struct {
 	closed  atomic.Bool
 }
 
-type pending struct {
+type task struct {
 	pool   string
 	result chan result
 	cancel context.CancelFunc
@@ -61,8 +61,8 @@ type workerEnvelope struct {
 
 func newManager(pools map[string]*pool) *manager {
 	return &manager{
-		pools:   pools,
-		handles: make(map[uint64]*pending),
+		pools: pools,
+		tasks: make(map[uint64]*task),
 	}
 }
 
@@ -87,14 +87,14 @@ func (m *manager) close() {
 		p.closed.Store(true)
 	}
 
-	m.handlesMu.Lock()
-	handles := m.handles
-	m.handles = make(map[uint64]*pending)
-	m.handlesMu.Unlock()
+	m.tasksMu.Lock()
+	tasks := m.tasks
+	m.tasks = make(map[uint64]*task)
+	m.tasksMu.Unlock()
 
-	for _, pending := range handles {
-		pending.cancelIfSet()
-		pending.finish(result{err: "Pogo pool is shutting down"})
+	for _, task := range tasks {
+		task.cancelIfSet()
+		task.finish(result{err: "Pogo pool is shutting down"})
 	}
 }
 
@@ -115,53 +115,53 @@ func (m *manager) pool(name string) (*pool, error) {
 	return p, nil
 }
 
-func (m *manager) cancel(handle uint64) {
+func (m *manager) cancel(taskID uint64) {
 	if m == nil {
 		return
 	}
 
-	m.handlesMu.Lock()
-	pending := m.handles[handle]
-	delete(m.handles, handle)
-	m.handlesMu.Unlock()
+	m.tasksMu.Lock()
+	task := m.tasks[taskID]
+	delete(m.tasks, taskID)
+	m.tasksMu.Unlock()
 
-	if pending != nil {
-		pending.cancelIfSet()
+	if task != nil {
+		task.cancelIfSet()
 	}
 }
 
-func (m *manager) take(handle uint64) (*pending, bool) {
-	m.handlesMu.Lock()
-	pending, ok := m.handles[handle]
+func (m *manager) take(taskID uint64) (*task, bool) {
+	m.tasksMu.Lock()
+	task, ok := m.tasks[taskID]
 	if ok {
-		delete(m.handles, handle)
+		delete(m.tasks, taskID)
 	}
-	m.handlesMu.Unlock()
+	m.tasksMu.Unlock()
 
-	return pending, ok
+	return task, ok
 }
 
-func (m *manager) has(handle uint64) bool {
-	m.handlesMu.Lock()
-	_, ok := m.handles[handle]
-	m.handlesMu.Unlock()
+func (m *manager) has(taskID uint64) bool {
+	m.tasksMu.Lock()
+	_, ok := m.tasks[taskID]
+	m.tasksMu.Unlock()
 
 	return ok
 }
 
-func (m *manager) store(handle uint64, pending *pending) error {
-	m.handlesMu.Lock()
+func (m *manager) store(taskID uint64, t *task) error {
+	m.tasksMu.Lock()
 	if m.closed.Load() {
-		m.handlesMu.Unlock()
-		pending.cancelIfSet()
+		m.tasksMu.Unlock()
+		t.cancelIfSet()
 		return errors.New("Pogo pool is shutting down")
 	}
-	m.handles[handle] = pending
-	m.handlesMu.Unlock()
+	m.tasks[taskID] = t
+	m.tasksMu.Unlock()
 	return nil
 }
 
-func (m *manager) nextHandle() uint64 {
+func (m *manager) nextTaskID() uint64 {
 	for {
 		id := m.nextID.Add(1)
 		if id != 0 {
@@ -170,19 +170,19 @@ func (m *manager) nextHandle() uint64 {
 	}
 }
 
-func (p *pending) cancelIfSet() {
-	if p.cancel != nil {
-		p.cancel()
+func (t *task) cancelIfSet() {
+	if t.cancel != nil {
+		t.cancel()
 	}
 }
 
-func (p *pending) finish(result result) {
-	if !p.done.CompareAndSwap(false, true) {
+func (t *task) finish(result result) {
+	if !t.done.CompareAndSwap(false, true) {
 		return
 	}
 
 	select {
-	case p.result <- result:
+	case t.result <- result:
 	default:
 	}
 }
@@ -196,12 +196,12 @@ func buildPayloadJSON(className string, argsJSON string) (string, error) {
 	return fmt.Sprintf(`{"class":%s,"args":%s}`, classJSON, argsJSON), nil
 }
 
-func awaitResult(pending *pending, timeout time.Duration) (string, error) {
+func awaitResult(t *task, timeout time.Duration) (string, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
-	case result := <-pending.result:
+	case result := <-t.result:
 		if result.err != "" {
 			return "", errors.New(result.err)
 		}
@@ -210,12 +210,12 @@ func awaitResult(pending *pending, timeout time.Duration) (string, error) {
 		}
 		return result.valueJSON, nil
 	case <-timer.C:
-		pending.cancelIfSet()
+		t.cancelIfSet()
 		return "", fmt.Errorf("Pogo await timed out after %s", timeout)
 	}
 }
 
-func (m *manager) dispatch(poolName string, className string, argsJSON string) (uint64, error) {
+func (m *manager) spawn(poolName string, className string, argsJSON string) (uint64, error) {
 	p, err := m.pool(poolName)
 	if err != nil {
 		return 0, err
@@ -234,33 +234,33 @@ func (m *manager) dispatch(poolName string, className string, argsJSON string) (
 		return 0, err
 	}
 
-	handle := m.nextHandle()
+	taskID := m.nextTaskID()
 	ctx, cancel := context.WithTimeout(context.Background(), p.maxWait)
-	pending := &pending{
+	t := &task{
 		pool:   p.name,
 		result: make(chan result, 1),
 		cancel: cancel,
 	}
-	if err := m.store(handle, pending); err != nil {
+	if err := m.store(taskID, t); err != nil {
 		return 0, err
 	}
 
-	go p.run(ctx, pending, payloadJSON)
+	go p.run(ctx, t, payloadJSON)
 
-	return handle, nil
+	return taskID, nil
 }
 
-func (p *pool) run(ctx context.Context, pending *pending, payload string) {
-	defer pending.cancelIfSet()
+func (p *pool) run(ctx context.Context, t *task, payload string) {
+	defer t.cancelIfSet()
 	response, err := p.workers.SendMessage(ctx, payload, nil)
 	if err != nil {
-		pending.finish(result{err: err.Error()})
+		t.finish(result{err: err.Error()})
 		return
 	}
 
 	normalized, err := normalizeWorkerResponse(response)
 	if err != nil {
-		pending.finish(result{err: err.Error()})
+		t.finish(result{err: err.Error()})
 		return
 	}
 
@@ -268,7 +268,7 @@ func (p *pool) run(ctx context.Context, pending *pending, payload string) {
 		if normalized.Error == "" {
 			normalized.Error = "Pogo worker returned an error"
 		}
-		pending.finish(result{err: normalized.Error})
+		t.finish(result{err: normalized.Error})
 		return
 	}
 
@@ -276,7 +276,7 @@ func (p *pool) run(ctx context.Context, pending *pending, payload string) {
 		normalized.Result = json.RawMessage("null")
 	}
 
-	pending.finish(result{valueJSON: string(normalized.Result)})
+	t.finish(result{valueJSON: string(normalized.Result)})
 }
 
 func normalizeWorkerResponse(response any) (workerEnvelope, error) {
@@ -314,42 +314,42 @@ func decodeEnvelope(data []byte) (workerEnvelope, error) {
 	return envelope, nil
 }
 
-func (m *manager) await(handle uint64, timeout time.Duration) (string, error) {
+func (m *manager) await(taskID uint64, timeout time.Duration) (string, error) {
 	if m == nil {
 		return "", errors.New("Pogo is not configured")
 	}
 
-	pending, ok := m.take(handle)
+	task, ok := m.take(taskID)
 	if !ok {
-		return "", errors.New("unknown or already awaited Pogo handle")
+		return "", errors.New("unknown or already awaited Pogo task")
 	}
 
-	return awaitResult(pending, timeout)
+	return awaitResult(task, timeout)
 }
 
-//export go_pogo_dispatch
-func go_pogo_dispatch(poolName *C.char, poolNameLen C.size_t, className *C.char, classNameLen C.size_t, argsJSON *C.char, argsJSONLen C.size_t, errOut **C.char) C.uint64_t {
+//export go_pogo_spawn
+func go_pogo_spawn(poolName *C.char, poolNameLen C.size_t, className *C.char, classNameLen C.size_t, argsJSON *C.char, argsJSONLen C.size_t, errOut **C.char) C.uint64_t {
 	pool := C.GoStringN(poolName, C.int(poolNameLen))
 	class := C.GoStringN(className, C.int(classNameLen))
 	args := C.GoStringN(argsJSON, C.int(argsJSONLen))
 
-	handle, err := currentManager().dispatch(pool, class, args)
+	taskID, err := currentManager().spawn(pool, class, args)
 	if err != nil {
 		*errOut = C.CString(err.Error())
 		return 0
 	}
 
-	return C.uint64_t(handle)
+	return C.uint64_t(taskID)
 }
 
 //export go_pogo_await
-func go_pogo_await(handle C.uint64_t, timeoutSeconds C.double, errOut **C.char) *C.char {
+func go_pogo_await(taskID C.uint64_t, timeoutSeconds C.double, errOut **C.char) *C.char {
 	if timeoutSeconds < 0 {
 		*errOut = C.CString("Pogo await timeout must be greater than or equal to zero")
 		return nil
 	}
 
-	result, err := currentManager().await(uint64(handle), time.Duration(float64(timeoutSeconds)*float64(time.Second)))
+	result, err := currentManager().await(uint64(taskID), time.Duration(float64(timeoutSeconds)*float64(time.Second)))
 	if err != nil {
 		*errOut = C.CString(err.Error())
 		return nil
@@ -359,13 +359,13 @@ func go_pogo_await(handle C.uint64_t, timeoutSeconds C.double, errOut **C.char) 
 }
 
 //export go_pogo_cancel
-func go_pogo_cancel(handle C.uint64_t) {
+func go_pogo_cancel(taskID C.uint64_t) {
 	m := currentManager()
 	if m == nil {
 		return
 	}
 
-	m.cancel(uint64(handle))
+	m.cancel(uint64(taskID))
 }
 
 //export go_pogo_pool_size

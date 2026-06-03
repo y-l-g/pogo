@@ -1,110 +1,104 @@
 # Pogo
 
-Request-scoped parallel PHP jobs for FrankenPHP.
+Request-scoped parallel PHP tasks for FrankenPHP.
 
-Pogo lets one PHP request dispatch independent jobs to isolated FrankenPHP
-extension worker pools, then await their results before returning the response.
-It is meant for fan-out/fan-in work such as remote API calls, independent
-computations, or response fragments.
+Pogo lets one PHP request spawn independent tasks in FrankenPHP worker pools,
+await their results, and return a response after the fan-out/fan-in work is
+done. It is built for bounded work such as independent API calls, CPU work, or
+response fragments.
 
-Pogo is not a queue. Jobs must complete within the request lifecycle. There is
-no persistence, retry, delay, cancellation API, event loop, fiber abstraction, or
-framework adapter in the core package.
-
-## Production status
-
-Pogo is experimental and its API may change. It is usable for demos and for
-request-scoped fan-out/fan-in jobs where each job can be retried by the caller
-or safely fail with the request.
-
-Do not use it as a durable queue, retry system, scheduler, or long-running task
-runner. Jobs are bounded by the request lifecycle and the configured worker pool
-timeouts.
+Pogo is not a queue. Tasks are tied to the current request. There is no
+persistence, retry system, delay API, scheduler, event loop, fiber abstraction,
+or framework adapter in the core module.
 
 ## API
 
-Pogo exposes three native functions:
+Pogo exposes three native PHP functions:
 
 ```php
-function pogo_dispatch(string $class, array $args = [], string $pool = 'default'): int;
-function pogo_await(int $handle, float $timeout = 5.0): mixed;
+function pogo_spawn(string $class, array $args = [], string $pool = 'default'): int;
+function pogo_await(int $task, float $timeout = 5.0): mixed;
 function pogo_pool_size(string $pool = 'default'): int;
 ```
 
 Example:
 
 ```php
-$price = pogo_dispatch(FetchPrice::class, ['sku' => $sku], 'external_api');
-$stock = pogo_dispatch(FetchStock::class, ['sku' => $sku], 'external_api');
-$tax   = pogo_dispatch(CalculateTax::class, ['sku' => $sku], 'cpu');
+$price = pogo_spawn(FetchPrice::class, ['sku' => $sku], 'external_api');
+$stock = pogo_spawn(FetchStock::class, ['sku' => $sku], 'external_api');
+$tax = pogo_spawn(CalculateTax::class, ['sku' => $sku], 'cpu');
 
 $response = [
     'price' => pogo_await($price, 2.0),
     'stock' => pogo_await($stock, 2.0),
-    'tax'   => pogo_await($tax, 2.0),
+    'tax' => pogo_await($tax, 2.0),
 ];
 ```
 
-`pogo_await()` throws `RuntimeException` for invalid handles, timeouts, worker
-failures, and job exceptions.
+`pogo_await()` throws `RuntimeException` for unknown tasks, timeouts, worker
+failures, invalid worker responses, and job exceptions returned by the worker.
 
-## Jobs
+## Job Contract
 
-The default worker expects jobs to implement `Pogo\JobInterface`:
+There is no required Composer package and no required interface. A task class
+only needs to be autoloadable by your worker and expose a public
+`handle(array $args): mixed` method:
 
 ```php
-use Pogo\JobInterface;
-
-final class FetchPrice implements JobInterface
+final class FetchPrice
 {
-    public function handle(array $args): mixed
+    public function handle(array $args): array
     {
         return ['sku' => $args['sku'], 'price' => 42];
     }
 }
 ```
 
-Job classes must be autoloadable in the worker. Arguments and return values must
-be JSON-compatible. Resources, closures, cyclic data, and unserializable objects
-are unsupported.
+Arguments and return values must be JSON-compatible. Resources, closures,
+cyclic data, and unserializable objects are unsupported.
 
-## Worker
+## Worker Contract
 
-Pogo ships a minimal worker at `worker/pogo-worker.php`. It receives a payload
-with a job class and args, runs the job, and returns a small response envelope:
+Your application owns the worker bootstrap. The worker receives:
+
+```php
+['class' => App\FetchPrice::class, 'args' => ['sku' => 'A-100']]
+```
+
+and must return one of these JSON-compatible envelopes:
 
 ```php
 ['ok' => true, 'result' => $value]
 ['ok' => false, 'error' => 'message']
 ```
 
-Applications that need a container or custom bootstrapping can provide their own
-worker script, as long as it keeps the same payload and response semantics.
+The example worker in `example/worker.php` is a small production template: it
+boots the app, validates the payload, instantiates the class, calls
+`handle(array $args)`, and converts exceptions to the error envelope.
 
 ## Caddy
 
-Configure Pogo as a FrankenPHP/Caddy global option. A `default` pool is
-required. Add more pools to isolate slow APIs, CPU-heavy work, or critical jobs.
+Configure Pogo as a FrankenPHP/Caddy global option. The top-level worker is the
+`default` pool. Add named pools when you need isolation for slow APIs, CPU-heavy
+tasks, or critical work.
 
 ```caddyfile
 {
     frankenphp
 
     pogo {
-        pool default {
-            worker public/pogo-worker.php
-            num_threads 8
-            max_wait 30s
-        }
+        worker worker.php
+        num_threads 8
+        max_wait 30s
 
         pool external_api {
-            worker public/pogo-worker.php
+            worker worker.php
             num_threads 16
             max_wait 10s
         }
 
         pool cpu {
-            worker public/pogo-worker.php
+            worker worker.php
             num_threads 4
             max_wait 60s
         }
@@ -116,18 +110,39 @@ Pool directives:
 
 - `worker`: PHP worker script. Required.
 - `num_threads`: FrankenPHP worker thread count. Optional.
-- `max_wait`: maximum `SendMessage` wait before the job is failed. Optional,
+- `max_wait`: maximum wait for `SendMessage` before the task fails. Optional,
   default `30s`.
 
-Handles are globally unique, so `pogo_await()` does not need the pool name.
+Task IDs are globally unique, so `pogo_await()` does not need the pool name.
 
-## Docker
+## Production Notes
 
-Build a FrankenPHP binary that includes Pogo with `xcaddy`. See the official
-[FrankenPHP Docker documentation](https://frankenphp.dev/docs/docker/) for the
-base image details.
+Use Pogo for tasks that can safely fail with the request or be retried by the
+caller. Keep tasks bounded by request timeouts and pool `max_wait` values.
 
-Example Dockerfile from this repository root:
+Use separate pools for workloads with different latency or capacity profiles.
+For example, do not run slow third-party API calls and CPU-heavy transforms in
+the same worker pool unless they can block each other safely.
+
+Call `pogo_await()` for every task you need. Unawaited tasks are canceled at
+request shutdown.
+
+## Example
+
+Build and run the included smoke app:
+
+```bash
+docker build -f example/Dockerfile -t pogo-example .
+docker run --rm -p 8080:8080 pogo-example
+curl http://localhost:8080
+```
+
+The response should show two sleeping tasks finishing in roughly one sleep
+duration, not the sum of both sleeps.
+
+## Build
+
+Build a FrankenPHP binary that includes Pogo with `xcaddy`:
 
 ```dockerfile
 FROM dunglas/frankenphp:builder AS builder
@@ -142,8 +157,7 @@ RUN CGO_ENABLED=1 \
     xcaddy build \
         --output /usr/local/bin/frankenphp \
         --with github.com/dunglas/frankenphp=./ \
-        --with github.com/dunglas/frankenphp/caddy=./caddy  \
-        --with github.com/dunglas/caddy-cbrotli \
+        --with github.com/dunglas/frankenphp/caddy=./caddy \
         --with github.com/y-l-g/pogo/module@main
 
 FROM dunglas/frankenphp AS runner
@@ -151,9 +165,22 @@ FROM dunglas/frankenphp AS runner
 COPY --from=builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 ```
 
-Then copy your app and `Caddyfile` into the runner image as usual.
+Then copy your app, worker script, and `Caddyfile` into the runner image.
 
-## Packages
+## Test
 
-- Go module: `github.com/y-l-g/pogo/module`
-- Composer package: `pogo/async`
+```bash
+docker run --rm \
+  -v "$PWD/module:/module" \
+  -w /module \
+  dunglas/frankenphp:1.12.3-builder-php8.5.6-trixie \
+  sh -lc 'CGO_ENABLED=1 \
+    CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" \
+    CGO_CPPFLAGS="$(php-config --includes)" \
+    CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" \
+    /usr/local/go/bin/go test ./... -tags=nobadger,nomysql,nopgx,nowatcher'
+```
+
+## Package
+
+Go module: `github.com/y-l-g/pogo/module`

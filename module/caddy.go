@@ -18,7 +18,10 @@ func init() {
 }
 
 type Pogo struct {
-	Pools []PoolConfig `json:"pools,omitempty"`
+	Worker     string         `json:"worker,omitempty"`
+	NumThreads int            `json:"num_threads,omitempty"`
+	MaxWait    caddy.Duration `json:"max_wait,omitempty"`
+	Pools      []PoolConfig   `json:"pools,omitempty"`
 
 	manager *manager
 }
@@ -38,12 +41,13 @@ func (Pogo) CaddyModule() caddy.ModuleInfo {
 }
 
 func (p *Pogo) Provision(_ caddy.Context) error {
-	if err := validatePoolConfigs(p.Pools); err != nil {
+	configs, err := p.poolConfigs()
+	if err != nil {
 		return err
 	}
 
-	pools := make(map[string]*pool, len(p.Pools))
-	for _, cfg := range p.Pools {
+	pools := make(map[string]*pool, len(configs))
+	for _, cfg := range configs {
 		maxWait := time.Duration(cfg.MaxWait)
 		if maxWait <= 0 {
 			maxWait = 30 * time.Second
@@ -62,9 +66,30 @@ func (p *Pogo) Provision(_ caddy.Context) error {
 	return nil
 }
 
+func (p *Pogo) poolConfigs() ([]PoolConfig, error) {
+	configs := make([]PoolConfig, 0, len(p.Pools)+1)
+
+	if p.Worker != "" || p.NumThreads != 0 || p.MaxWait != 0 {
+		configs = append(configs, PoolConfig{
+			Name:       defaultPoolName,
+			Worker:     p.Worker,
+			NumThreads: p.NumThreads,
+			MaxWait:    p.MaxWait,
+		})
+	}
+
+	configs = append(configs, p.Pools...)
+
+	if err := validatePoolConfigs(configs); err != nil {
+		return nil, err
+	}
+
+	return configs, nil
+}
+
 func validatePoolConfigs(configs []PoolConfig) error {
 	if len(configs) == 0 {
-		return fmt.Errorf("pogo requires at least one pool")
+		return fmt.Errorf("pogo requires a default worker")
 	}
 
 	seen := make(map[string]struct{}, len(configs))
@@ -106,6 +131,32 @@ func (p *Pogo) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {
 			switch d.Val() {
+			case "worker":
+				value, err := readSingleArg(d, "worker")
+				if err != nil {
+					return err
+				}
+				p.Worker = value
+			case "num_threads":
+				value, err := readSingleArg(d, "num_threads")
+				if err != nil {
+					return err
+				}
+				n, err := strconv.Atoi(value)
+				if err != nil {
+					return d.WrapErr(err)
+				}
+				p.NumThreads = n
+			case "max_wait":
+				value, err := readSingleArg(d, "max_wait")
+				if err != nil {
+					return err
+				}
+				duration, err := caddy.ParseDuration(value)
+				if err != nil {
+					return d.WrapErr(err)
+				}
+				p.MaxWait = caddy.Duration(duration)
 			case "pool":
 				cfg, err := unmarshalPool(d)
 				if err != nil {
@@ -136,24 +187,27 @@ func unmarshalPool(d *caddyfile.Dispenser) (PoolConfig, error) {
 	for d.NextBlock(1) {
 		switch d.Val() {
 		case "worker":
-			if !d.NextArg() {
-				return cfg, d.ArgErr()
+			value, err := readSingleArg(d, "worker")
+			if err != nil {
+				return cfg, err
 			}
-			cfg.Worker = d.Val()
+			cfg.Worker = value
 		case "num_threads":
-			if !d.NextArg() {
-				return cfg, d.ArgErr()
+			value, err := readSingleArg(d, "num_threads")
+			if err != nil {
+				return cfg, err
 			}
-			n, err := strconv.Atoi(d.Val())
+			n, err := strconv.Atoi(value)
 			if err != nil {
 				return cfg, d.WrapErr(err)
 			}
 			cfg.NumThreads = n
 		case "max_wait":
-			if !d.NextArg() {
-				return cfg, d.ArgErr()
+			value, err := readSingleArg(d, "max_wait")
+			if err != nil {
+				return cfg, err
 			}
-			duration, err := caddy.ParseDuration(d.Val())
+			duration, err := caddy.ParseDuration(value)
 			if err != nil {
 				return cfg, d.WrapErr(err)
 			}
@@ -164,6 +218,19 @@ func unmarshalPool(d *caddyfile.Dispenser) (PoolConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func readSingleArg(d *caddyfile.Dispenser, directive string) (string, error) {
+	if !d.NextArg() {
+		return "", d.ArgErr()
+	}
+
+	value := d.Val()
+	if d.NextArg() {
+		return "", d.Errf(`too many arguments for "%s": %s`, directive, d.Val())
+	}
+
+	return value, nil
 }
 
 func parseGlobalOption(d *caddyfile.Dispenser, _ any) (any, error) {

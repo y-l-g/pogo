@@ -48,7 +48,7 @@ func testManager(pools map[string]*pool) *manager {
 	return newManager(pools)
 }
 
-func TestDispatchUsesNamedPool(t *testing.T) {
+func TestSpawnUsesNamedPool(t *testing.T) {
 	defaultWorkers := &fakeWorkers{response: `{"ok":true,"result":"default"}`}
 	apiWorkers := &fakeWorkers{response: `{"ok":true,"result":"api"}`}
 	m := testManager(map[string]*pool{
@@ -56,12 +56,12 @@ func TestDispatchUsesNamedPool(t *testing.T) {
 		"external_api":  newPool("external_api", apiWorkers, time.Second),
 	})
 
-	handle, err := m.dispatch("external_api", "App\\Job", `[]`)
+	task, err := m.spawn("external_api", "App\\Job", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch failed: %v", err)
+		t.Fatalf("spawn failed: %v", err)
 	}
 
-	result, err := m.await(handle, time.Second)
+	result, err := m.await(task, time.Second)
 	if err != nil {
 		t.Fatalf("await failed: %v", err)
 	}
@@ -77,12 +77,12 @@ func TestDispatchUsesNamedPool(t *testing.T) {
 	}
 }
 
-func TestUnknownPoolDispatchFails(t *testing.T) {
+func TestUnknownPoolSpawnFails(t *testing.T) {
 	m := testManager(map[string]*pool{
 		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{}, time.Second),
 	})
 
-	if _, err := m.dispatch("missing", "App\\Job", `[]`); err == nil {
+	if _, err := m.spawn("missing", "App\\Job", `[]`); err == nil {
 		t.Fatal("expected unknown pool error")
 	}
 }
@@ -93,21 +93,21 @@ func TestHandlesAreGloballyUniqueAcrossPools(t *testing.T) {
 		"cpu":           newPool("cpu", &fakeWorkers{response: `{"ok":true,"result":2}`}, time.Second),
 	})
 
-	a, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
+	a, err := m.spawn(defaultPoolName, "App\\Job", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch default failed: %v", err)
+		t.Fatalf("spawn default failed: %v", err)
 	}
-	b, err := m.dispatch("cpu", "App\\Job", `[]`)
+	b, err := m.spawn("cpu", "App\\Job", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch cpu failed: %v", err)
+		t.Fatalf("spawn cpu failed: %v", err)
 	}
 
 	if a == b {
-		t.Fatal("handles from different pools must be globally unique")
+		t.Fatal("tasks from different pools must be globally unique")
 	}
 }
 
-func TestAwaitTimeoutDeletesHandleAndLateResultDoesNotBlock(t *testing.T) {
+func TestAwaitTimeoutDeletesTaskAndLateResultDoesNotBlock(t *testing.T) {
 	workers := &fakeWorkers{
 		delay:    50 * time.Millisecond,
 		response: `{"ok":true,"result":"late"}`,
@@ -117,23 +117,23 @@ func TestAwaitTimeoutDeletesHandleAndLateResultDoesNotBlock(t *testing.T) {
 		defaultPoolName: newPool(defaultPoolName, workers, time.Second),
 	})
 
-	handle, err := m.dispatch(defaultPoolName, "App\\SlowJob", `[]`)
+	task, err := m.spawn(defaultPoolName, "App\\SlowJob", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch failed: %v", err)
+		t.Fatalf("spawn failed: %v", err)
 	}
 
-	if _, err := m.await(handle, time.Millisecond); err == nil {
+	if _, err := m.await(task, time.Millisecond); err == nil {
 		t.Fatal("expected await timeout")
 	}
 
-	if m.has(handle) {
-		t.Fatal("timed out handle was not deleted")
+	if m.has(task) {
+		t.Fatal("timed out task was not deleted")
 	}
 
 	time.Sleep(100 * time.Millisecond)
 }
 
-func TestCancelDeletesHandleAndCancelsWorkerContext(t *testing.T) {
+func TestCancelDeletesTaskAndCancelsWorkerContext(t *testing.T) {
 	canceled := make(chan struct{})
 	workers := &fakeWorkers{
 		delay:    time.Second,
@@ -144,15 +144,15 @@ func TestCancelDeletesHandleAndCancelsWorkerContext(t *testing.T) {
 		defaultPoolName: newPool(defaultPoolName, workers, time.Second),
 	})
 
-	handle, err := m.dispatch(defaultPoolName, "App\\SlowJob", `[]`)
+	task, err := m.spawn(defaultPoolName, "App\\SlowJob", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch failed: %v", err)
+		t.Fatalf("spawn failed: %v", err)
 	}
 
-	m.cancel(handle)
+	m.cancel(task)
 
-	if m.has(handle) {
-		t.Fatal("canceled handle was not deleted")
+	if m.has(task) {
+		t.Fatal("canceled task was not deleted")
 	}
 
 	select {
@@ -162,31 +162,31 @@ func TestCancelDeletesHandleAndCancelsWorkerContext(t *testing.T) {
 	}
 }
 
-func TestAwaitUnknownHandleFails(t *testing.T) {
+func TestAwaitUnknownTaskFails(t *testing.T) {
 	m := testManager(map[string]*pool{
 		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{}, time.Second),
 	})
 
 	if _, err := m.await(42, time.Millisecond); err == nil {
-		t.Fatal("expected unknown handle error")
+		t.Fatal("expected unknown task error")
 	}
 }
 
-func TestAwaitSameHandleTwiceFails(t *testing.T) {
+func TestAwaitSameTaskTwiceFails(t *testing.T) {
 	m := testManager(map[string]*pool{
 		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{response: `{"ok":true,"result":123}`}, time.Second),
 	})
 
-	handle, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
+	task, err := m.spawn(defaultPoolName, "App\\Job", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch failed: %v", err)
+		t.Fatalf("spawn failed: %v", err)
 	}
 
-	if result, err := m.await(handle, time.Second); err != nil || result != "123" {
+	if result, err := m.await(task, time.Second); err != nil || result != "123" {
 		t.Fatalf("unexpected first await result=%q err=%v", result, err)
 	}
 
-	if _, err := m.await(handle, time.Second); err == nil {
+	if _, err := m.await(task, time.Second); err == nil {
 		t.Fatal("expected second await to fail")
 	}
 }
@@ -196,12 +196,12 @@ func TestWorkerErrorPropagates(t *testing.T) {
 		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{err: errors.New("worker failed")}, time.Second),
 	})
 
-	handle, err := m.dispatch(defaultPoolName, "App\\Job", `[]`)
+	task, err := m.spawn(defaultPoolName, "App\\Job", `[]`)
 	if err != nil {
-		t.Fatalf("dispatch failed: %v", err)
+		t.Fatalf("spawn failed: %v", err)
 	}
 
-	if _, err := m.await(handle, time.Second); err == nil || err.Error() != "worker failed" {
+	if _, err := m.await(task, time.Second); err == nil || err.Error() != "worker failed" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

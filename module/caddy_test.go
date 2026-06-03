@@ -3,6 +3,7 @@ package pogo
 import (
 	"testing"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
@@ -15,13 +16,12 @@ func parsePogoConfig(t *testing.T, input string) (*Pogo, error) {
 	return p, err
 }
 
-func TestUnmarshalMultiplePools(t *testing.T) {
+func TestUnmarshalDefaultWorkerAndNamedPool(t *testing.T) {
 	p, err := parsePogoConfig(t, `pogo {
-		pool default {
-			worker public/pogo-worker.php
-			num_threads 2
-			max_wait 5s
-		}
+		worker worker.php
+		num_threads 2
+		max_wait 5s
+
 		pool external_api {
 			worker public/api-worker.php
 			num_threads 7
@@ -32,21 +32,44 @@ func TestUnmarshalMultiplePools(t *testing.T) {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
 
-	if len(p.Pools) != 2 {
-		t.Fatalf("expected 2 pools, got %d", len(p.Pools))
+	if p.Worker != "worker.php" || p.NumThreads != 2 {
+		t.Fatalf("unexpected default config: %#v", p)
 	}
-	if p.Pools[0].Name != defaultPoolName || p.Pools[1].Name != "external_api" {
-		t.Fatalf("unexpected pool names: %#v", p.Pools)
+	if len(p.Pools) != 1 || p.Pools[0].Name != "external_api" {
+		t.Fatalf("unexpected pools: %#v", p.Pools)
 	}
-	if p.Pools[1].Worker != "public/api-worker.php" || p.Pools[1].NumThreads != 7 {
-		t.Fatalf("unexpected external_api config: %#v", p.Pools[1])
+	if p.Pools[0].Worker != "public/api-worker.php" || p.Pools[0].NumThreads != 7 {
+		t.Fatalf("unexpected external_api config: %#v", p.Pools[0])
+	}
+}
+
+func TestPoolConfigsBuildDefaultPoolFromTopLevelWorker(t *testing.T) {
+	p := &Pogo{
+		Worker:     "worker.php",
+		NumThreads: 2,
+		Pools: []PoolConfig{{
+			Name:   "external_api",
+			Worker: "public/api-worker.php",
+		}},
+	}
+
+	configs, err := p.poolConfigs()
+	if err != nil {
+		t.Fatalf("pool config failed: %v", err)
+	}
+
+	if len(configs) != 2 {
+		t.Fatalf("expected 2 pool configs, got %d", len(configs))
+	}
+	if configs[0].Name != defaultPoolName || configs[0].Worker != "worker.php" {
+		t.Fatalf("unexpected default pool config: %#v", configs[0])
 	}
 }
 
 func TestValidatePoolConfigsRequiresDefault(t *testing.T) {
 	err := validatePoolConfigs([]PoolConfig{{
 		Name:   "external_api",
-		Worker: "public/pogo-worker.php",
+		Worker: "worker.php",
 	}})
 	if err == nil {
 		t.Fatal("expected missing default pool error")
@@ -60,6 +83,19 @@ func TestValidatePoolConfigsRejectsDuplicatePool(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected duplicate pool error")
+	}
+}
+
+func TestPoolConfigsRejectsDuplicateDefaultPool(t *testing.T) {
+	err := (&Pogo{
+		Worker: "public/default-worker.php",
+		Pools: []PoolConfig{{
+			Name:   defaultPoolName,
+			Worker: "public/other-worker.php",
+		}},
+	}).Provision(caddy.Context{})
+	if err == nil {
+		t.Fatal("expected duplicate default pool error")
 	}
 }
 
