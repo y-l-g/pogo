@@ -36,9 +36,9 @@ $response = [
 ```
 
 `pogo_await()` throws `RuntimeException` for unknown tasks, timeouts, worker
-failures, invalid worker responses, and job exceptions returned by the worker.
+failures, invalid worker responses, and task exceptions returned by the worker.
 
-## Job Contract
+## Task Contract
 
 There is no required Composer package and no required interface. A task class
 only needs to be autoloadable by your worker and expose a public
