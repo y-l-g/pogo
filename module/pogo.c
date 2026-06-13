@@ -192,6 +192,11 @@ PHP_FUNCTION(pogo_await)
 		Z_PARAM_DOUBLE(timeout)
 	ZEND_PARSE_PARAMETERS_END();
 
+	if (timeout < 0) {
+		zend_throw_exception(runtime_exception_ce(), "Pogo await timeout must be greater than or equal to zero", 0);
+		RETURN_THROWS();
+	}
+
 	untrack_task((uint64_t) task);
 
 	json = go_pogo_await((uint64_t) task, timeout, &err);

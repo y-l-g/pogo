@@ -109,3 +109,39 @@ print(
     f"results={len(results)} elapsed_ms={elapsed_ms}"
 )
 PY
+
+negative_url="http://127.0.0.1:$port/negative-timeout.php"
+negative_response="$(curl -fsS "$negative_url")"
+
+RESPONSE="$negative_response" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ["RESPONSE"]
+
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(f"Invalid negative-timeout JSON response: {exc}", file=sys.stderr)
+    print(raw, file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+result = payload.get("result")
+
+if payload.get("caught_invalid_timeout") is not True:
+    errors.append("caught_invalid_timeout must be true")
+
+if not isinstance(result, dict):
+    errors.append(f"result must be an object, got {result!r}")
+elif result.get("slept_ms") != 25:
+    errors.append(f"result.slept_ms must be 25, got {result.get('slept_ms')!r}")
+
+if errors:
+    print("Negative-timeout smoke response failed validation:", file=sys.stderr)
+    for error in errors:
+        print(f"- {error}", file=sys.stderr)
+    print(raw, file=sys.stderr)
+    sys.exit(1)
+PY
