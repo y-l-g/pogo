@@ -169,6 +169,12 @@ Then copy your app, worker script, and `Caddyfile` into the runner image.
 
 ## Test
 
+Run the full example smoke check:
+
+```bash
+bash scripts/smoke-example.sh
+```
+
 ```bash
 docker run --rm \
   -v "$PWD/module:/module" \

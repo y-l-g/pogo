@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run module tests
+        run: |
+          docker run --rm \
+            -v "$PWD/module:/module:ro" \
+            -w /module \
+            dunglas/frankenphp:1.12.3-builder-php8.5.6-trixie \
+            sh -lc 'CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE $(php-config --includes)" CGO_CPPFLAGS="$(php-config --includes)" CGO_LDFLAGS="$(php-config --ldflags) $(php-config --libs)" /usr/local/go/bin/go test ./... -tags=nobadger,nomysql,nopgx,nowatcher'
+
+      - name: Run example smoke test
+        run: bash scripts/smoke-example.sh
