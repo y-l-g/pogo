@@ -115,6 +115,14 @@ func (m *manager) pool(name string) (*pool, error) {
 	return p, nil
 }
 
+func (m *manager) poolSize(poolName string) (int, error) {
+	p, err := m.pool(poolName)
+	if err != nil {
+		return 0, err
+	}
+	return p.workers.NumThreads(), nil
+}
+
 func (m *manager) cancel(taskID uint64) {
 	if m == nil {
 		return
@@ -369,14 +377,15 @@ func go_pogo_cancel(taskID C.uint64_t) {
 }
 
 //export go_pogo_pool_size
-func go_pogo_pool_size(poolName *C.char, poolNameLen C.size_t) C.int {
+func go_pogo_pool_size(poolName *C.char, poolNameLen C.size_t, errOut **C.char) C.int {
 	pool := C.GoStringN(poolName, C.int(poolNameLen))
-	p, err := currentManager().pool(pool)
+	size, err := currentManager().poolSize(pool)
 	if err != nil {
+		*errOut = C.CString(err.Error())
 		return 0
 	}
 
-	return C.int(p.workers.NumThreads())
+	return C.int(size)
 }
 
 var _ = unsafe.Pointer(nil)

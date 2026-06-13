@@ -212,12 +212,22 @@ func TestPoolSizeUsesSelectedPool(t *testing.T) {
 		"external_api":  newPool("external_api", &fakeWorkers{threads: 7}, time.Second),
 	})
 
-	p, err := m.pool("external_api")
+	size, err := m.poolSize("external_api")
 	if err != nil {
-		t.Fatalf("pool lookup failed: %v", err)
+		t.Fatalf("pool size lookup failed: %v", err)
 	}
 
-	if p.workers.NumThreads() != 7 {
-		t.Fatalf("unexpected pool size: %d", p.workers.NumThreads())
+	if size != 7 {
+		t.Fatalf("unexpected pool size: %d", size)
+	}
+}
+
+func TestPoolSizeUnknownPoolFails(t *testing.T) {
+	m := testManager(map[string]*pool{
+		defaultPoolName: newPool(defaultPoolName, &fakeWorkers{threads: 2}, time.Second),
+	})
+
+	if _, err := m.poolSize("missing"); err == nil {
+		t.Fatal("expected unknown pool error")
 	}
 }

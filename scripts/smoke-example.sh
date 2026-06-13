@@ -145,3 +145,37 @@ if errors:
     print(raw, file=sys.stderr)
     sys.exit(1)
 PY
+
+pool_size_error_url="http://127.0.0.1:$port/pool-size-error.php"
+pool_size_error_response="$(curl -fsS "$pool_size_error_url")"
+
+RESPONSE="$pool_size_error_response" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ["RESPONSE"]
+
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(f"Invalid pool-size-error JSON response: {exc}", file=sys.stderr)
+    print(raw, file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+message = payload.get("message")
+
+if payload.get("caught_unknown_pool") is not True:
+    errors.append("caught_unknown_pool must be true")
+
+if not isinstance(message, str) or "unknown Pogo pool" not in message:
+    errors.append(f"message must include unknown Pogo pool, got {message!r}")
+
+if errors:
+    print("Pool-size-error smoke response failed validation:", file=sys.stderr)
+    for error in errors:
+        print(f"- {error}", file=sys.stderr)
+    print(raw, file=sys.stderr)
+    sys.exit(1)
+PY

@@ -37,6 +37,8 @@ $response = [
 
 `pogo_await()` throws `RuntimeException` for unknown tasks, timeouts, worker
 failures, invalid worker responses, and task exceptions returned by the worker.
+`pogo_pool_size()` throws `RuntimeException` when Pogo is not configured or the
+pool name is unknown.
 
 ## Task Contract
 

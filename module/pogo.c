@@ -225,11 +225,20 @@ PHP_FUNCTION(pogo_pool_size)
 {
 	char *pool_name = "default";
 	size_t pool_name_len = sizeof("default") - 1;
+	char *err = NULL;
+	int size = 0;
 
 	ZEND_PARSE_PARAMETERS_START(0, 1)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_STRING(pool_name, pool_name_len)
 	ZEND_PARSE_PARAMETERS_END();
 
-	RETURN_LONG((zend_long) go_pogo_pool_size(pool_name, pool_name_len));
+	size = go_pogo_pool_size(pool_name, pool_name_len, &err);
+
+	if (err != NULL) {
+		throw_runtime_from_cstr(err);
+		RETURN_THROWS();
+	}
+
+	RETURN_LONG((zend_long) size);
 }
